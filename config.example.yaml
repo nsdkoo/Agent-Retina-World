@@ -1,0 +1,21 @@
+# 复制为 config.yaml 后修改
+
+capture:
+  interval_seconds: 30        # 定时截图间隔
+  output_dir: data/screenshots
+
+dedup:
+  phash_threshold: 8          # 感知哈希汉明距离阈值，越小越严格
+  semantic_threshold: 0.92    # 语义相似度阈值（需 VLM/embedding 时启用）
+
+vlm:
+  provider: mock              # mock | openai_compatible
+  base_url: http://127.0.0.1:8000/v1
+  model: qwen2.5-vl-7b-instruct
+  api_key: ""
+
+memory:
+  db_path: data/memory/events.db
+
+proactive:
+  output_dir: data/reports
