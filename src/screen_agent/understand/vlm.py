@@ -8,6 +8,8 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from screen_agent.capture.context import ForegroundContext, get_foreground_context
+
 
 class PageCategory(str, Enum):
     BROWSER = "browser"
@@ -47,6 +49,8 @@ class PageUnderstanding:
     user_action: UserAction = UserAction.UNKNOWN
     high_value_events: list[str] = field(default_factory=list)
     summary: str = ""
+    window_title: str = ""
+    process_name: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +62,8 @@ class PageUnderstanding:
             "user_action": self.user_action.value,
             "high_value_events": self.high_value_events,
             "summary": self.summary,
+            "window_title": self.window_title,
+            "process_name": self.process_name,
         }
 
 
@@ -67,39 +73,69 @@ class VLMAnalyzer(ABC):
         ...
 
 
-class MockVLMAnalyzer(VLMAnalyzer):
-    """无 API 时的启发式 Mock，便于本地跑通链路。"""
+def _safe_enum(enum_cls: type[Enum], value: str, default: Enum) -> Enum:
+    try:
+        return enum_cls(value)
+    except ValueError:
+        return default
+
+
+class HeuristicAnalyzer(VLMAnalyzer):
+    """基于前台窗口与进程名的启发式理解（无需 VLM API）。"""
 
     _RULES: list[tuple[re.Pattern[str], PageCategory, UserAction]] = [
-        (re.compile(r"chrome|edge|firefox|browser", re.I), PageCategory.BROWSER, UserAction.BROWSING),
-        (re.compile(r"cursor|vscode|pycharm|idea", re.I), PageCategory.IDE, UserAction.DEBUGGING),
-        (re.compile(r"powershell|cmd|terminal|bash", re.I), PageCategory.TERMINAL, UserAction.TYPING),
-        (re.compile(r"wechat|slack|discord|飞书", re.I), PageCategory.CHAT, UserAction.READING),
+        (re.compile(r"chrome|msedge|firefox|edge|browser", re.I), PageCategory.BROWSER, UserAction.BROWSING),
+        (re.compile(r"cursor|code\.exe|vscode|pycharm|idea64|devenv", re.I), PageCategory.IDE, UserAction.DEBUGGING),
+        (re.compile(r"powershell|cmd\.exe|windowsterminal|wt\.exe|bash", re.I), PageCategory.TERMINAL, UserAction.TYPING),
+        (re.compile(r"wechat|weixin|slack|discord|feishu|lark", re.I), PageCategory.CHAT, UserAction.READING),
+        (re.compile(r"word|winword|excel|powerpnt|wps", re.I), PageCategory.DOCUMENT, UserAction.READING),
+        (re.compile(r"explorer\.exe", re.I), PageCategory.FILE_MANAGER, UserAction.BROWSING),
+        (re.compile(r"vlc|potplayer|bilibili|youtube", re.I), PageCategory.VIDEO, UserAction.READING),
+        (re.compile(r"settings|控制面板|设置", re.I), PageCategory.SETTINGS, UserAction.READING),
     ]
 
     def analyze(self, screenshot_path: Path) -> PageUnderstanding:
-        name = screenshot_path.name.lower()
+        ctx = get_foreground_context()
+        hint = ctx.hint_text if ctx else screenshot_path.name.lower()
+        title = ctx.window_title if ctx else ""
+        process = ctx.process_name or "" if ctx else ""
+
         category = PageCategory.OTHER
         action = UserAction.UNKNOWN
         for pattern, cat, act in self._RULES:
-            if pattern.search(name):
+            if pattern.search(hint):
                 category, action = cat, act
                 break
+
+        entities = [e for e in (title, process) if e]
+        events: list[str] = []
+        if title:
+            events.append(f"foreground:{title[:80]}")
+
+        summary = f"{category.value} / {action.value}"
+        if title:
+            summary += f" — {title[:60]}"
 
         return PageUnderstanding(
             screenshot_path=str(screenshot_path),
             analyzed_at=datetime.now(),
             page_category=category,
-            text_blocks=[f"mock-block-from-{screenshot_path.name}"],
-            entities=["mock-entity"],
+            text_blocks=[title] if title else [],
+            entities=entities,
             user_action=action,
-            high_value_events=["mock_event:screen_captured"],
-            summary=f"Mock 理解：{category.value} / {action.value}",
+            high_value_events=events,
+            summary=summary,
+            window_title=title,
+            process_name=process,
         )
 
 
+# 兼容旧名称
+MockVLMAnalyzer = HeuristicAnalyzer
+
+
 class OpenAICompatibleVLMAnalyzer(VLMAnalyzer):
-    """对接 OpenAI 兼容 VLM API（如 Qwen2.5-VL）。"""
+    """对接 OpenAI 兼容 VLM API。"""
 
     PROMPT = """分析这张桌面截图，返回 JSON：
 {
@@ -122,6 +158,7 @@ class OpenAICompatibleVLMAnalyzer(VLMAnalyzer):
     def analyze(self, screenshot_path: Path) -> PageUnderstanding:
         import base64
 
+        ctx = get_foreground_context()
         raw = screenshot_path.read_bytes()
         b64 = base64.b64encode(raw).decode()
         payload = {
@@ -146,10 +183,12 @@ class OpenAICompatibleVLMAnalyzer(VLMAnalyzer):
         return PageUnderstanding(
             screenshot_path=str(screenshot_path),
             analyzed_at=datetime.now(),
-            page_category=PageCategory(data.get("page_category", "other")),
+            page_category=_safe_enum(PageCategory, data.get("page_category", "other"), PageCategory.OTHER),
             text_blocks=data.get("text_blocks", []),
             entities=data.get("entities", []),
-            user_action=UserAction(data.get("user_action", "unknown")),
+            user_action=_safe_enum(UserAction, data.get("user_action", "unknown"), UserAction.UNKNOWN),
             high_value_events=data.get("high_value_events", []),
             summary=data.get("summary", ""),
+            window_title=ctx.window_title if ctx else "",
+            process_name=ctx.process_name or "" if ctx else "",
         )
