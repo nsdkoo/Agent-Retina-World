@@ -2,9 +2,17 @@
 
 **桌面屏幕世界感知 Agent** — 让 AI 理解你在电脑上做了什么，并主动提供服务。
 
-> 个人原创项目 · v0.1
+> 个人原创项目 · v0.2
 
 ![系统架构](docs/images/architecture.png)
+
+## v0.2 更新
+
+- **L2 直方图去重**：在 pHash 之后增加缩略图直方图相似度过滤
+- **前台窗口感知**：Windows 下读取活动窗口标题与进程名，启发式理解无需 VLM
+- **活动聚合优化**：同场景连续帧合并为单条事件，附带 `frame_count`
+- **新命令**：`timeline` 活动时间线 · `stats` 运行统计
+- **单元测试**：`python -m unittest discover -s tests`
 
 ## 项目亮点
 
@@ -75,8 +83,9 @@ sequenceDiagram
 | 模块 | 路径 | 职责 |
 | --- | --- | --- |
 | 截图采集 | `capture/screen.py` | 多显示器截图，按时间戳归档 |
-| 去重 | `dedup/hasher.py` | pHash 汉明距离判重，降低 VLM 成本 |
-| 页面理解 | `understand/vlm.py` | Mock / OpenAI 兼容 VLM，结构化输出 |
+| 去重 | `dedup/hasher.py` | L1 pHash + L2 直方图相似度 |
+| 页面理解 | `understand/vlm.py` | 启发式 / OpenAI 兼容 VLM |
+| 前台上下文 | `capture/context.py` | Windows 活动窗口标题与进程 |
 | 活动聚合 | `activity/store.py` | 时间序列事件构建与 SQLite 存储 |
 | 主动服务 | `proactive/service.py` | 日报、待办、时间分布 |
 | 编排 | `pipeline.py` | 全链路调度与统计 |
@@ -92,19 +101,24 @@ pip install -r requirements.txt
 python main.py once          # 采集并理解一帧
 python main.py watch -i 30   # 定时监听
 python main.py report        # 生成每日总结
+python main.py timeline      # 查看活动时间线
+python main.py stats         # 运行与去重统计
+python -m unittest discover -s tests
 ```
 
 ## 配置
 
-复制 `config.example.yaml` 为 `config.yaml`。默认 `vlm.provider: mock` 无需 API，本地可跑通全链路。
+复制 `config.example.yaml` 为 `config.yaml`。默认 `vlm.provider: heuristic` 基于前台窗口理解，无需 API。
 
 对接真实 VLM 时改为 `openai_compatible`，填入 `base_url` / `model` / `api_key`。
 
 ## 路线图
 
-- [ ] 语义 embedding 二级去重
-- [ ] Qwen2.5-VL 真实推理与评测
-- [ ] 10+ 页面场景 / 12+ 行为类型分类优化
+- [x] L2 直方图二级去重
+- [x] Windows 前台窗口感知
+- [x] 活动时间线 CLI
+- [ ] embedding 语义去重
+- [ ] VLM 真实推理与评测
 - [ ] 跨会话任务归并与证据追溯 UI
 
 ## License
