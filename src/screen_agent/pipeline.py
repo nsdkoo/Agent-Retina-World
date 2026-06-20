@@ -7,9 +7,12 @@ import yaml
 
 from screen_agent.activity.store import ActivityAggregator, MemoryStore
 from screen_agent.capture.screen import ScreenCapturer
+from screen_agent.config import load_yaml, resolve_secret
 from screen_agent.dedup.hasher import ScreenshotDeduper
+from screen_agent.dedup.pipeline import MultiStageDeduper
+from screen_agent.dedup.semantic import EmbeddingClient, SemanticDeduper
 from screen_agent.proactive.service import ProactiveService
-from screen_agent.understand.vlm import HeuristicAnalyzer, OpenAICompatibleVLMAnalyzer, VLMAnalyzer
+from screen_agent.understand.vlm import VLMAnalyzer, build_analyzer
 
 
 @dataclass
@@ -34,29 +37,46 @@ class PipelineStats:
 @dataclass
 class PerceptionPipeline:
     capturer: ScreenCapturer
-    deduper: ScreenshotDeduper
+    deduper: MultiStageDeduper
     analyzer: VLMAnalyzer
     aggregator: ActivityAggregator
     memory: MemoryStore
     proactive: ProactiveService
+    semantic_post: SemanticDeduper | None = None
     stats: PipelineStats = field(default_factory=PipelineStats)
 
     @classmethod
     def from_config(cls, config_path: Path) -> PerceptionPipeline:
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        raw = load_yaml(config_path)
         capture_cfg = raw["capture"]
         dedup_cfg = raw["dedup"]
         vlm_cfg = raw["vlm"]
         memory_cfg = raw["memory"]
         proactive_cfg = raw["proactive"]
         activity_cfg = raw.get("activity", {})
+        embed_cfg = raw.get("embedding", {})
 
         capturer = ScreenCapturer(Path(capture_cfg["output_dir"]))
-        deduper = ScreenshotDeduper(
+        visual = ScreenshotDeduper(
             phash_threshold=int(dedup_cfg["phash_threshold"]),
             histogram_threshold=float(dedup_cfg.get("histogram_threshold", 0.98)),
             enable_histogram=bool(dedup_cfg.get("enable_histogram", True)),
         )
+
+        semantic: SemanticDeduper | None = None
+        if embed_cfg.get("enabled"):
+            api_key = resolve_secret(embed_cfg.get("api_key"), embed_cfg.get("api_key_env", "EMBEDDING_API_KEY"))
+            client = EmbeddingClient(
+                base_url=embed_cfg["base_url"],
+                model=embed_cfg["model"],
+                api_key=api_key,
+            )
+            semantic = SemanticDeduper(
+                client=client,
+                threshold=float(embed_cfg.get("threshold", 0.92)),
+            )
+
+        deduper = MultiStageDeduper(visual=visual, semantic=semantic)
         memory = MemoryStore(Path(memory_cfg["db_path"]))
         proactive = ProactiveService(memory, Path(proactive_cfg["output_dir"]))
         aggregator = ActivityAggregator(
@@ -64,16 +84,7 @@ class PerceptionPipeline:
                 minutes=int(activity_cfg.get("merge_window_minutes", 3))
             )
         )
-
-        provider = vlm_cfg.get("provider", "heuristic")
-        if provider == "openai_compatible":
-            analyzer: VLMAnalyzer = OpenAICompatibleVLMAnalyzer(
-                base_url=vlm_cfg["base_url"],
-                model=vlm_cfg["model"],
-                api_key=vlm_cfg.get("api_key", ""),
-            )
-        else:
-            analyzer = HeuristicAnalyzer()
+        analyzer = build_analyzer(vlm_cfg)
 
         return cls(
             capturer=capturer,
@@ -82,6 +93,7 @@ class PerceptionPipeline:
             aggregator=aggregator,
             memory=memory,
             proactive=proactive,
+            semantic_post=semantic,
         )
 
     def run_once(self) -> dict:
@@ -103,6 +115,9 @@ class PerceptionPipeline:
         understanding = self.analyzer.analyze(frame.path)
         self.stats.analyzed += 1
 
+        if self.semantic_post and understanding.summary:
+            self.semantic_post.remember(understanding.summary)
+
         new_events = self.aggregator.ingest(understanding)
         for evt in new_events:
             self.memory.save_event(evt)
@@ -115,6 +130,7 @@ class PerceptionPipeline:
             "action": understanding.user_action.value,
             "window_title": understanding.window_title,
             "summary": understanding.summary,
+            "source": understanding.source,
             "new_events": len(new_events),
         }
 

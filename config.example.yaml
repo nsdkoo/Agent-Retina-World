@@ -7,17 +7,33 @@ dedup:
   histogram_threshold: 0.98
   enable_histogram: true
 
+embedding:
+  enabled: false
+  base_url: http://127.0.0.1:8000/v1
+  model: text-embedding-3-small
+  api_key: ""
+  api_key_env: EMBEDDING_API_KEY
+  threshold: 0.92
+
 activity:
   merge_window_minutes: 3
 
 vlm:
-  provider: heuristic          # heuristic | openai_compatible
+  provider: heuristic              # heuristic | openai_compatible
   base_url: http://127.0.0.1:8000/v1
-  model: your-vlm-model
+  model: qwen2.5-vl-7b-instruct
   api_key: ""
+  api_key_env: VLM_API_KEY
+  max_retries: 2
+  timeout: 120
+  fallback_heuristic: true
 
 memory:
   db_path: data/memory/events.db
 
 proactive:
   output_dir: data/reports
+
+web:
+  host: 127.0.0.1
+  port: 8765
