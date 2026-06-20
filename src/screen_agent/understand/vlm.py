@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
-from screen_agent.capture.context import ForegroundContext, get_foreground_context
+from pydantic import BaseModel, Field, ValidationError
+
+from screen_agent.capture.context import get_foreground_context
+
+logger = logging.getLogger(__name__)
+
+PAGE_CATEGORIES = [
+    "browser", "ide", "terminal", "chat", "document",
+    "spreadsheet", "video", "settings", "file_manager", "other",
+]
+USER_ACTIONS = [
+    "reading", "typing", "browsing", "debugging", "meeting",
+    "searching", "copy_paste", "scrolling", "idle", "switch_app", "download", "unknown",
+]
 
 
 class PageCategory(str, Enum):
@@ -39,6 +54,15 @@ class UserAction(str, Enum):
     UNKNOWN = "unknown"
 
 
+class VLMOutputSchema(BaseModel):
+    page_category: str = "other"
+    text_blocks: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    user_action: str = "unknown"
+    high_value_events: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
 @dataclass
 class PageUnderstanding:
     screenshot_path: str
@@ -51,6 +75,7 @@ class PageUnderstanding:
     summary: str = ""
     window_title: str = ""
     process_name: str = ""
+    source: str = "heuristic"
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +89,7 @@ class PageUnderstanding:
             "summary": self.summary,
             "window_title": self.window_title,
             "process_name": self.process_name,
+            "source": self.source,
         }
 
 
@@ -78,6 +104,28 @@ def _safe_enum(enum_cls: type[Enum], value: str, default: Enum) -> Enum:
         return enum_cls(value)
     except ValueError:
         return default
+
+
+def _from_schema(
+    schema: VLMOutputSchema,
+    screenshot_path: Path,
+    ctx_title: str,
+    ctx_process: str,
+    source: str,
+) -> PageUnderstanding:
+    return PageUnderstanding(
+        screenshot_path=str(screenshot_path),
+        analyzed_at=datetime.now(),
+        page_category=_safe_enum(PageCategory, schema.page_category, PageCategory.OTHER),
+        text_blocks=schema.text_blocks,
+        entities=schema.entities,
+        user_action=_safe_enum(UserAction, schema.user_action, UserAction.UNKNOWN),
+        high_value_events=schema.high_value_events,
+        summary=schema.summary,
+        window_title=ctx_title,
+        process_name=ctx_process,
+        source=source,
+    )
 
 
 class HeuristicAnalyzer(VLMAnalyzer):
@@ -116,58 +164,77 @@ class HeuristicAnalyzer(VLMAnalyzer):
         if title:
             summary += f" — {title[:60]}"
 
-        return PageUnderstanding(
-            screenshot_path=str(screenshot_path),
-            analyzed_at=datetime.now(),
-            page_category=category,
+        schema = VLMOutputSchema(
+            page_category=category.value,
             text_blocks=[title] if title else [],
             entities=entities,
-            user_action=action,
+            user_action=action.value,
             high_value_events=events,
             summary=summary,
-            window_title=title,
-            process_name=process,
         )
+        return _from_schema(schema, screenshot_path, title, process, "heuristic")
 
 
-# 兼容旧名称
 MockVLMAnalyzer = HeuristicAnalyzer
 
 
 class OpenAICompatibleVLMAnalyzer(VLMAnalyzer):
-    """对接 OpenAI 兼容 VLM API。"""
+    """对接 OpenAI 兼容多模态 VLM API（如 Qwen2.5-VL、GPT-4o）。"""
 
-    PROMPT = """分析这张桌面截图，返回 JSON：
-{
-  "page_category": "browser|ide|terminal|chat|document|...",
-  "text_blocks": ["..."],
-  "entities": ["..."],
-  "user_action": "reading|typing|browsing|...",
-  "high_value_events": ["..."],
-  "summary": "一句话摘要"
-}"""
+    PROMPT = f"""你是桌面屏幕理解助手。分析截图并**仅**返回 JSON，字段如下：
+{{
+  "page_category": "{'|'.join(PAGE_CATEGORIES)}",
+  "text_blocks": ["可见关键文本片段"],
+  "entities": ["文件名、应用名、关键词"],
+  "user_action": "{'|'.join(USER_ACTIONS)}",
+  "high_value_events": ["值得记录的事件"],
+  "summary": "一句话描述用户正在做什么"
+}}"""
 
-    def __init__(self, base_url: str, model: str, api_key: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str,
+        max_retries: int = 2,
+        timeout: float = 120.0,
+    ) -> None:
         import httpx
 
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
-        self._client = httpx.Client(timeout=120.0)
+        self.max_retries = max_retries
+        self._client = httpx.Client(timeout=timeout)
+
+    def _parse_response(self, content: str) -> VLMOutputSchema:
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        data = json.loads(text)
+        return VLMOutputSchema.model_validate(data)
 
     def analyze(self, screenshot_path: Path) -> PageUnderstanding:
         import base64
 
         ctx = get_foreground_context()
+        title = ctx.window_title if ctx else ""
+        process = ctx.process_name or "" if ctx else ""
         raw = screenshot_path.read_bytes()
         b64 = base64.b64encode(raw).decode()
+
+        context_hint = ""
+        if title or process:
+            context_hint = f"\n\n前台窗口：{title}\n进程：{process}"
+
         payload = {
             "model": self.model,
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": self.PROMPT},
+                        {"type": "text", "text": self.PROMPT + context_hint},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
                     ],
                 }
@@ -175,20 +242,54 @@ class OpenAICompatibleVLMAnalyzer(VLMAnalyzer):
             "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        data = json.loads(content)
+        last_err: Exception | None = None
 
-        return PageUnderstanding(
-            screenshot_path=str(screenshot_path),
-            analyzed_at=datetime.now(),
-            page_category=_safe_enum(PageCategory, data.get("page_category", "other"), PageCategory.OTHER),
-            text_blocks=data.get("text_blocks", []),
-            entities=data.get("entities", []),
-            user_action=_safe_enum(UserAction, data.get("user_action", "unknown"), UserAction.UNKNOWN),
-            high_value_events=data.get("high_value_events", []),
-            summary=data.get("summary", ""),
-            window_title=ctx.window_title if ctx else "",
-            process_name=ctx.process_name or "" if ctx else "",
-        )
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+                schema = self._parse_response(content)
+                return _from_schema(schema, screenshot_path, title, process, "vlm")
+            except (json.JSONDecodeError, ValidationError, KeyError, httpx.HTTPError) as exc:
+                last_err = exc
+                logger.warning("VLM 调用失败 attempt=%s: %s", attempt + 1, exc)
+
+        raise RuntimeError(f"VLM 分析失败: {last_err}") from last_err
+
+
+class FallbackVLMAnalyzer(VLMAnalyzer):
+    """VLM 失败时自动降级启发式。"""
+
+    def __init__(self, primary: VLMAnalyzer, fallback: HeuristicAnalyzer | None = None) -> None:
+        self.primary = primary
+        self.fallback = fallback or HeuristicAnalyzer()
+
+    def analyze(self, screenshot_path: Path) -> PageUnderstanding:
+        try:
+            return self.primary.analyze(screenshot_path)
+        except Exception as exc:
+            logger.warning("VLM 降级启发式: %s", exc)
+            result = self.fallback.analyze(screenshot_path)
+            result.source = "heuristic_fallback"
+            return result
+
+
+def build_analyzer(vlm_cfg: dict[str, Any]) -> VLMAnalyzer:
+    from screen_agent.config import resolve_secret
+
+    provider = vlm_cfg.get("provider", "heuristic")
+    if provider != "openai_compatible":
+        return HeuristicAnalyzer()
+
+    api_key = resolve_secret(vlm_cfg.get("api_key"), vlm_cfg.get("api_key_env", "VLM_API_KEY"))
+    primary = OpenAICompatibleVLMAnalyzer(
+        base_url=vlm_cfg["base_url"],
+        model=vlm_cfg["model"],
+        api_key=api_key,
+        max_retries=int(vlm_cfg.get("max_retries", 2)),
+        timeout=float(vlm_cfg.get("timeout", 120)),
+    )
+    if vlm_cfg.get("fallback_heuristic", True):
+        return FallbackVLMAnalyzer(primary)
+    return primary
