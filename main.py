@@ -71,6 +71,18 @@ def cmd_stats(args: argparse.Namespace) -> None:
     print(json.dumps(pipeline.runtime_stats(), ensure_ascii=False, indent=2))
 
 
+def cmd_serve(args: argparse.Namespace) -> None:
+    from screen_agent.config import load_yaml
+    from screen_agent.web.server import run_server
+
+    raw = load_yaml(args.config)
+    web_cfg = raw.get("web", {})
+    host = args.host or web_cfg.get("host", "127.0.0.1")
+    port = args.port or int(web_cfg.get("port", 8765))
+    print(f"Agent-Retina-World v{__version__} · Web UI http://{host}:{port}")
+    run_server(args.config, host=host, port=port)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=f"Agent-Retina-World · 屏幕世界感知 Agent v{__version__}"
@@ -91,6 +103,11 @@ def main() -> None:
     p_tl.set_defaults(func=cmd_timeline)
 
     sub.add_parser("stats", help="查看运行统计").set_defaults(func=cmd_stats)
+
+    p_serve = sub.add_parser("serve", help="启动 Web 时间线 UI")
+    p_serve.add_argument("--host", default=None)
+    p_serve.add_argument("--port", type=int, default=None)
+    p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     args.config = ensure_config(args.config)
