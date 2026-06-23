@@ -37,3 +37,23 @@ proactive:
 web:
   host: 127.0.0.1
   port: 8765
+
+voice:
+  wake_names: ["Retina", "小光", "光光"]
+  speak_feedback: true
+  language: zh-CN
+  listen_timeout: 8
+  phrase_limit: 12
+  energy_threshold: 300
+  apps:
+    微信: WeChat
+    浏览器: msedge
+    Edge: msedge
+    Cursor: Cursor
+    终端: wt
+    代码: Cursor
+  urls:
+    百度: https://www.baidu.com
+    谷歌: https://www.google.com
+    GitHub: https://github.com
+    知乎: https://www.zhihu.com

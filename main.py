@@ -83,6 +83,20 @@ def cmd_serve(args: argparse.Namespace) -> None:
     run_server(args.config, host=host, port=port)
 
 
+def cmd_voice(args: argparse.Namespace) -> None:
+    from screen_agent.voice.assistant import VoiceAssistant
+    from screen_agent.voice.sidebar import VoiceSidebar
+
+    assistant = VoiceAssistant(args.config)
+    if args.no_ui:
+        print(f"Agent-Retina-World v{__version__} · 语音常驻模式（无界面）")
+        print(f"唤醒词：{', '.join(assistant.wake_names)}")
+        assistant.run_forever()
+    else:
+        sidebar = VoiceSidebar(assistant)
+        sidebar.run()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=f"Agent-Retina-World · 屏幕世界感知 Agent v{__version__}"
@@ -108,6 +122,10 @@ def main() -> None:
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_voice = sub.add_parser("voice", help="启动语音常驻助手（呼唤名字即可操作）")
+    p_voice.add_argument("--no-ui", action="store_true", help="无侧边栏，纯后台监听")
+    p_voice.set_defaults(func=cmd_voice)
 
     args = parser.parse_args()
     args.config = ensure_config(args.config)
