@@ -2,9 +2,21 @@
 
 **桌面屏幕世界感知 Agent** — 让 AI 理解你在电脑上做了什么，并主动提供服务。
 
-> 个人原创项目 · v0.3
+> 个人原创项目 · v0.4
 
 ![系统架构](docs/images/architecture.png)
+
+## v0.4 更新 · 语音常驻助手
+
+**不用打字、不用对话窗口** — 呼唤名字直接说话：
+
+```powershell
+python main.py voice
+```
+
+说 **「小光，截图」** · **「Retina，打开百度」** · **「小光，分析屏幕」**
+
+桌面右侧常驻侧边栏，麦克风聆听 + 语音播报反馈。详见 [docs/voice-assistant.md](docs/voice-assistant.md)
 
 ## v0.3 更新
 
@@ -109,7 +121,8 @@ python main.py watch -i 30   # 定时监听
 python main.py report        # 生成每日总结
 python main.py timeline      # 查看活动时间线
 python main.py stats         # 运行与去重统计
-python main.py serve         # Web 时间线 UI → http://127.0.0.1:8765
+python main.py serve         # Web 时间线 UI
+python main.py voice         # 语音常驻助手（呼唤名字即可）
 python -m unittest discover -s tests
 ```
 
@@ -151,6 +164,7 @@ embedding:
 - [x] embedding 语义去重
 - [x] VLM 真实推理（OpenAI 兼容）
 - [x] Web 时间线 UI
+- [x] 语音唤醒常驻助手（呼唤名字操作）
 - [ ] 跨会话任务归并与证据追溯
 
 ## License
