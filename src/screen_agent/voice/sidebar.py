@@ -11,6 +11,7 @@ STATUS_LABELS = {
     "idle": ("● 待机", "#64748b"),
     "listening": ("● 聆听中", "#22c55e"),
     "processing": ("● 执行中", "#3b82f6"),
+    "session": ("● 连续对话", "#a855f7"),
 }
 
 
@@ -66,7 +67,7 @@ class VoiceSidebar:
         hint = "、".join(self.assistant.wake_names[:3])
         tk.Label(
             self.root,
-            text=f"说：「{hint}，截图」\n「{hint}，打开百度」\n「{hint}，分析屏幕」",
+            text=f"唤醒：「{hint}，截图」\n连续对话：唤醒后直接说指令\n结束：说「退出」",
             fg="#8b9cb3",
             bg="#1a2332",
             font=("Segoe UI", 9),

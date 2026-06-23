@@ -34,6 +34,7 @@ class CommandExecutor:
             IntentType.TIMELINE: self._timeline,
             IntentType.STATS: self._stats,
             IntentType.OPEN_WEB_UI: self._open_web_ui,
+            IntentType.END_SESSION: self._end_session,
         }
         handler = handlers.get(intent.type)
         if not handler:
@@ -96,3 +97,6 @@ class CommandExecutor:
     def _open_web_ui(self, intent: Intent) -> ActionResult:
         webbrowser.open(self.web_url)
         return ActionResult(success=True, message="已打开时间线面板", detail={"url": self.web_url})
+
+    def _end_session(self, intent: Intent) -> ActionResult:
+        return ActionResult(success=True, message="好的，有事再叫我", detail={"end_session": True})

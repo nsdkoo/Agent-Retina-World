@@ -14,6 +14,7 @@ class IntentType(str, Enum):
     TIMELINE = "timeline"
     STATS = "stats"
     OPEN_WEB_UI = "open_web_ui"
+    END_SESSION = "end_session"
     UNKNOWN = "unknown"
 
 
@@ -43,6 +44,9 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
 
     if re.search(r"时间线|活动记录", text):
         return Intent(IntentType.TIMELINE, raw_command=text)
+
+    if re.search(r"退出|没事了|再见|结束对话|退下吧|先这样", text):
+        return Intent(IntentType.END_SESSION, raw_command=text)
 
     if re.search(r"统计|运行状态|状态", text):
         return Intent(IntentType.STATS, raw_command=text)
