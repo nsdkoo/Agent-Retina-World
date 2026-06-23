@@ -17,6 +17,7 @@ Thumbs.db
 # 运行时数据
 data/
 config.yaml
+models/
 
 # 本地 IDE 规则（不提交公开仓库）
 .cursor/

@@ -84,17 +84,32 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def cmd_voice(args: argparse.Namespace) -> None:
+    from screen_agent.config import load_yaml
     from screen_agent.voice.assistant import VoiceAssistant
+    from screen_agent.voice.floating_ball import FloatingBallUI
+    from screen_agent.voice.offline_stt import download_vosk_model
     from screen_agent.voice.sidebar import VoiceSidebar
 
-    assistant = VoiceAssistant(args.config)
-    if args.no_ui:
-        print(f"Agent-Retina-World v{__version__} · 语音常驻模式（无界面）")
+    if args.download_model:
+        raw = load_yaml(args.config)
+        model_rel = raw.get("voice", {}).get("vosk_model_path", "models/vosk-model-small-cn-0.22")
+        download_vosk_model(ROOT / Path(model_rel).parent)
+        return
+
+    assistant = VoiceAssistant(args.config, project_root=ROOT)
+    ui_mode = args.ui
+    if not ui_mode:
+        raw = load_yaml(args.config)
+        ui_mode = raw.get("voice", {}).get("ui", "ball")
+
+    if args.no_ui or ui_mode == "none":
+        print(f"Agent-Retina-World v{__version__} · 语音常驻（无界面）")
         print(f"唤醒词：{', '.join(assistant.wake_names)}")
         assistant.run_forever()
+    elif ui_mode == "sidebar":
+        VoiceSidebar(assistant).run()
     else:
-        sidebar = VoiceSidebar(assistant)
-        sidebar.run()
+        FloatingBallUI(assistant).run()
 
 
 def main() -> None:
@@ -124,7 +139,9 @@ def main() -> None:
     p_serve.set_defaults(func=cmd_serve)
 
     p_voice = sub.add_parser("voice", help="启动语音常驻助手（呼唤名字即可操作）")
-    p_voice.add_argument("--no-ui", action="store_true", help="无侧边栏，纯后台监听")
+    p_voice.add_argument("--no-ui", action="store_true", help="无界面，纯后台监听")
+    p_voice.add_argument("--ui", choices=["ball", "sidebar", "none"], default=None, help="UI 模式，默认悬浮球")
+    p_voice.add_argument("--download-model", action="store_true", help="下载 Vosk 离线中文语音模型")
     p_voice.set_defaults(func=cmd_voice)
 
     args = parser.parse_args()

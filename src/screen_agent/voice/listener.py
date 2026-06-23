@@ -3,27 +3,31 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from screen_agent.voice.offline_stt import STTEngine
+
 logger = logging.getLogger(__name__)
 
 
 class SpeechListener:
-    """麦克风语音听写（中文）。"""
+    """麦克风语音听写，支持在线 Google / 离线 Vosk。"""
 
     def __init__(
         self,
-        language: str = "zh-CN",
+        engine: STTEngine,
         timeout: float = 8.0,
         phrase_limit: float = 12.0,
         energy_threshold: int = 300,
+        sample_rate: int = 16000,
     ) -> None:
-        self.language = language
+        self.engine = engine
         self.timeout = timeout
         self.phrase_limit = phrase_limit
         self.energy_threshold = energy_threshold
+        self.sample_rate = sample_rate
         self._recognizer = None
         self._microphone = None
 
-    def _ensure_deps(self) -> None:
+    def _ensure_mic(self) -> None:
         if self._recognizer is not None:
             return
         import speech_recognition as sr
@@ -31,10 +35,10 @@ class SpeechListener:
         self._recognizer = sr.Recognizer()
         self._recognizer.energy_threshold = self.energy_threshold
         self._recognizer.dynamic_energy_threshold = True
-        self._microphone = sr.Microphone()
+        self._microphone = sr.Microphone(sample_rate=self.sample_rate)
 
     def listen_once(self, on_listening: Callable[[], None] | None = None) -> str | None:
-        self._ensure_deps()
+        self._ensure_mic()
         import speech_recognition as sr
 
         assert self._recognizer is not None
@@ -42,7 +46,7 @@ class SpeechListener:
 
         try:
             with self._microphone as source:
-                self._recognizer.adjust_for_ambient_noise(source, duration=0.4)
+                self._recognizer.adjust_for_ambient_noise(source, duration=0.35)
                 if on_listening:
                     on_listening()
                 audio = self._recognizer.listen(
@@ -50,11 +54,8 @@ class SpeechListener:
                     timeout=self.timeout,
                     phrase_time_limit=self.phrase_limit,
                 )
-            text = self._recognizer.recognize_google(audio, language=self.language)
-            return text.strip()
+            return self.engine.transcribe(audio, self.sample_rate)
         except sr.WaitTimeoutError:
-            return None
-        except sr.UnknownValueError:
             return None
         except Exception as exc:
             logger.warning("语音识别失败: %s", exc)
