@@ -2,70 +2,77 @@
 
 ## 交互方式
 
-**不需要打开对话窗口、不需要打字。**
+**不用打字、不用对话窗口。**
 
-1. 运行 `python main.py voice`
-2. 桌面右侧出现常驻侧边栏
-3. 直接对着麦克风说：**「小光，截图」** / **「Retina，打开百度」** / **「小光，分析屏幕」**
-4. Agent 语音播报执行结果
+```powershell
+# 1. 下载离线语音模型（约 42MB，只需一次）
+python main.py voice --download-model
 
-## 唤醒词
+# 2. 启动悬浮球（默认）
+python main.py voice
+```
 
-在 `config.yaml` 配置：
+## 三种 UI
+
+| 模式 | 命令 |
+| --- | --- |
+| **悬浮球**（默认） | `python main.py voice` |
+| 侧边栏 | `python main.py voice --ui sidebar` |
+| 无界面 | `python main.py voice --no-ui` |
+
+悬浮球：52px 小圆球，可拖动，双击展开日志，右键退出。
+
+## 免唤醒连续对话
+
+1. 先说唤醒词：**「小光，截图」**
+2. 进入**连续对话模式**（悬浮球变紫色）
+3. 接下来 **60 秒内** 直接说指令，无需再喊名字：
+   - 「打开百度」
+   - 「再看看屏幕」
+   - 「今日总结」
+4. 说 **「退出」** / **「没事了」** 结束，或超时自动退出
+
+配置：
 
 ```yaml
 voice:
-  wake_names: ["Retina", "小光", "光光"]
+  session_mode: true
+  session_duration_seconds: 60
 ```
 
-必须包含唤醒词，后面跟指令。
+## 离线语音识别
+
+默认 `stt_engine: auto` — 有 Vosk 模型则**完全离线**，否则回退 Google 在线。
+
+```yaml
+voice:
+  stt_engine: vosk    # 强制离线
+  vosk_model_path: models/vosk-model-small-cn-0.22
+```
+
+下载模型：
+
+```powershell
+python main.py voice --download-model
+pip install vosk pyaudio SpeechRecognition pyttsx3
+```
 
 ## 支持的语音指令
 
-| 说法示例 | 动作 |
+| 说法 | 动作 |
 | --- | --- |
-| 截图 / 截屏 / 截个图 | 截图 + 屏幕理解 |
-| 分析屏幕 / 看看我在干什么 | 同上 |
-| 打开百度 / 打开 GitHub | 打开网页 |
-| 打开 https://... | 打开指定 URL |
-| 打开微信 / 打开 Cursor | 启动应用 |
-| 今日总结 / 日报 | 生成每日报告 |
-| 时间线 | 播报最近活动 |
-| 打开面板 | 打开 Web 时间线 UI |
+| 截图 / 截屏 | 截图 + 理解 |
+| 打开百度 / 打开 Cursor | 开网页 / 开应用 |
+| 分析屏幕 | 屏幕理解 |
+| 今日总结 | 日报 |
+| 退出 / 没事了 | 结束连续对话 |
 
-可在 `voice.apps` 和 `voice.urls` 里自定义别名。
-
-## 启动方式
+## 与屏幕感知配合
 
 ```powershell
-# 带侧边栏（推荐）
+# 终端 1：后台感知
+python main.py watch -i 30
+
+# 终端 2：语音操控
 python main.py voice
-
-# 纯后台，无界面
-python main.py voice --no-ui
 ```
-
-## 依赖
-
-需要麦克风。首次使用请安装：
-
-```powershell
-pip install SpeechRecognition pyttsx3
-pip install pyaudio
-```
-
-Windows 若 `pyaudio` 安装失败，可尝试：
-
-```powershell
-pip install pipwin
-pipwin install pyaudio
-```
-
-语音识别默认使用 Google 在线 STT（`zh-CN`），需联网。
-
-## 与屏幕感知的关系
-
-- **voice**：你主动说话 → 立即执行（截图、开网页、开应用）
-- **watch**：后台定时感知 → 自动记录活动时间线
-
-两者可同时运行：一个终端 `watch`，一个终端 `voice`。

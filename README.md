@@ -2,9 +2,20 @@
 
 **桌面屏幕世界感知 Agent** — 让 AI 理解你在电脑上做了什么，并主动提供服务。
 
-> 个人原创项目 · v0.4
+> 个人原创项目 · v0.5
 
 ![系统架构](docs/images/architecture.png)
+
+## v0.5 更新 · 免唤醒 + 离线 + 悬浮球
+
+```powershell
+python main.py voice --download-model   # 离线模型（一次）
+python main.py voice                    # 默认悬浮球 UI
+```
+
+- **免唤醒连续对话**：唤醒一次，60 秒内直接说指令
+- **离线语音识别**：Vosk 中文模型，无网可用（`stt_engine: auto`）
+- **悬浮球 UI**：52px 可拖动，双击看日志
 
 ## v0.4 更新 · 语音常驻助手
 
@@ -122,7 +133,9 @@ python main.py report        # 生成每日总结
 python main.py timeline      # 查看活动时间线
 python main.py stats         # 运行与去重统计
 python main.py serve         # Web 时间线 UI
-python main.py voice         # 语音常驻助手（呼唤名字即可）
+python main.py voice         # 悬浮球语音助手（默认）
+python main.py voice --ui sidebar
+python main.py voice --download-model
 python -m unittest discover -s tests
 ```
 
