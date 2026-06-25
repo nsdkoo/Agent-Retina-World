@@ -9,6 +9,7 @@ from typing import Callable
 
 from screen_agent.config import load_yaml
 from screen_agent.pipeline import PerceptionPipeline
+from screen_agent.understand.chat import build_chat_client
 from screen_agent.voice.executor import ActionResult, CommandExecutor
 from screen_agent.voice.intents import IntentType, parse_intent
 from screen_agent.voice.listener import Speaker, SpeechListener
@@ -23,6 +24,7 @@ class VoiceAssistant:
     def __init__(self, config_path: Path, project_root: Path | None = None) -> None:
         raw = load_yaml(config_path)
         voice_cfg = raw.get("voice", {})
+        chat_cfg = raw.get("chat", {})
         web_cfg = raw.get("web", {})
         root = project_root or config_path.parent
 
@@ -30,6 +32,8 @@ class VoiceAssistant:
         self.session_enabled = bool(voice_cfg.get("session_mode", True))
         self.session_duration = float(voice_cfg.get("session_duration_seconds", 60))
         self.stt_engine_name = voice_cfg.get("stt_engine", "auto")
+        self.chat_enabled = bool(chat_cfg.get("enabled", False))
+        self.chat_model = chat_cfg.get("model", "gpt-5.4-mini")
 
         self.pipeline = PerceptionPipeline.from_config(config_path)
         web_host = web_cfg.get("host", "127.0.0.1")
@@ -49,7 +53,17 @@ class VoiceAssistant:
             energy_threshold=int(voice_cfg.get("energy_threshold", 300)),
         )
         self.speaker = Speaker(enabled=bool(voice_cfg.get("speak_feedback", True)))
-        self.executor = CommandExecutor(self.pipeline, web_url=self.web_url)
+
+        self._chat_history: list[dict[str, str]] = []
+        chat_client = build_chat_client(chat_cfg)
+        self.executor = CommandExecutor(
+            self.pipeline,
+            web_url=self.web_url,
+            chat_client=chat_client,
+            chat_history=self._chat_history,
+            max_history=int(chat_cfg.get("max_history", 6)),
+            screen_context_fn=self._recent_screen_context,
+        )
         self.app_aliases: dict[str, str] = voice_cfg.get("apps", {})
         self.url_aliases: dict[str, str] = voice_cfg.get("urls", {})
 
@@ -61,6 +75,14 @@ class VoiceAssistant:
         self._on_transcript: Callable[[str], None] | None = None
         self._on_result: Callable[[str], None] | None = None
         self._on_session: Callable[[bool], None] | None = None
+
+    def _recent_screen_context(self) -> str:
+        try:
+            md = self.pipeline.proactive.timeline_markdown(limit=1)
+            lines = [ln.lstrip("- ").strip() for ln in md.split("\n") if ln.startswith("- ")]
+            return lines[0][:120] if lines else ""
+        except Exception:
+            return ""
 
     def on_status(self, cb: Callable[[str], None]) -> None:
         self._on_status = cb
@@ -98,6 +120,7 @@ class VoiceAssistant:
             self._set_status("session")
         else:
             self._session_until = 0.0
+            self._chat_history.clear()
             self._set_status("idle")
         if self._on_session:
             self._on_session(active)
@@ -154,7 +177,8 @@ class VoiceAssistant:
         self._running = True
         names = "、".join(f"「{n}」" for n in self.wake_names[:3])
         engine_hint = "离线" if self.stt_engine_name == "vosk" else "在线/离线自动"
-        self._emit_result(f"语音助手已启动（{engine_hint}）· 呼唤 {names}")
+        chat_hint = f" · 对话模型 {self.chat_model}" if self.chat_enabled else ""
+        self._emit_result(f"语音助手已启动（{engine_hint}{chat_hint}）· 呼唤 {names}")
         if self.session_enabled:
             self._emit_result("唤醒后进入连续对话，说「退出」结束")
         self.speaker.say("语音助手已就绪")

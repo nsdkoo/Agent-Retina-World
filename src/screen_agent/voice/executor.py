@@ -5,8 +5,10 @@ import subprocess
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from screen_agent.pipeline import PerceptionPipeline
+from screen_agent.understand.chat import DisabledChatClient, OpenAICompatibleChatClient, SYSTEM_PROMPT
 from screen_agent.voice.intents import Intent, IntentType
 
 logger = logging.getLogger(__name__)
@@ -20,9 +22,21 @@ class ActionResult:
 
 
 class CommandExecutor:
-    def __init__(self, pipeline: PerceptionPipeline, web_url: str = "http://127.0.0.1:8765") -> None:
+    def __init__(
+        self,
+        pipeline: PerceptionPipeline,
+        web_url: str = "http://127.0.0.1:8765",
+        chat_client: OpenAICompatibleChatClient | DisabledChatClient | None = None,
+        chat_history: list[dict[str, str]] | None = None,
+        max_history: int = 6,
+        screen_context_fn: Callable[[], str] | None = None,
+    ) -> None:
         self.pipeline = pipeline
         self.web_url = web_url
+        self.chat_client = chat_client or DisabledChatClient()
+        self.chat_history = chat_history if chat_history is not None else []
+        self.max_history = max_history
+        self._screen_context_fn = screen_context_fn
 
     def run(self, intent: Intent) -> ActionResult:
         handlers = {
@@ -35,6 +49,7 @@ class CommandExecutor:
             IntentType.STATS: self._stats,
             IntentType.OPEN_WEB_UI: self._open_web_ui,
             IntentType.END_SESSION: self._end_session,
+            IntentType.CHAT: self._chat,
         }
         handler = handlers.get(intent.type)
         if not handler:
@@ -47,6 +62,39 @@ class CommandExecutor:
         except Exception as exc:
             logger.exception("命令执行失败")
             return ActionResult(success=False, message=f"执行失败：{exc}")
+
+    def _chat(self, intent: Intent) -> ActionResult:
+        if isinstance(self.chat_client, DisabledChatClient):
+            return ActionResult(
+                success=False,
+                message="对话未配置，请设置 chat.enabled 和 OPENAI_API_KEY",
+            )
+
+        user_text = intent.raw_command.strip()
+        if not user_text:
+            return ActionResult(success=False, message="我没听清，请再说一遍")
+
+        system = SYSTEM_PROMPT
+        if self._screen_context_fn:
+            ctx = self._screen_context_fn()
+            if ctx:
+                system = f"{SYSTEM_PROMPT}\n\n最近屏幕活动：{ctx}"
+
+        messages = list(self.chat_history)
+        messages.append({"role": "user", "content": user_text})
+
+        try:
+            reply = self.chat_client.complete(messages, system=system)
+        except Exception as exc:
+            logger.exception("Chat 请求失败")
+            return ActionResult(success=False, message=f"对话失败：{exc}")
+
+        self.chat_history.append({"role": "user", "content": user_text})
+        self.chat_history.append({"role": "assistant", "content": reply})
+        if len(self.chat_history) > self.max_history:
+            del self.chat_history[: len(self.chat_history) - self.max_history]
+
+        return ActionResult(success=True, message=reply, detail={"chat": True})
 
     def _screenshot(self, intent: Intent) -> ActionResult:
         result = self.pipeline.run_once()
@@ -99,4 +147,5 @@ class CommandExecutor:
         return ActionResult(success=True, message="已打开时间线面板", detail={"url": self.web_url})
 
     def _end_session(self, intent: Intent) -> ActionResult:
+        self.chat_history.clear()
         return ActionResult(success=True, message="好的，有事再叫我", detail={"end_session": True})

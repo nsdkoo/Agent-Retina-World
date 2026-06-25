@@ -6,7 +6,6 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from screen_agent.activity.store import MemoryStore
 from screen_agent.config import load_yaml
 from screen_agent.pipeline import PerceptionPipeline
 

@@ -88,7 +88,8 @@ class Speaker:
         if self._engine is None:
             return
         try:
-            self._engine.say(text[:120])
+            spoken = text[:200]
+            self._engine.say(spoken)
             self._engine.runAndWait()
         except Exception as exc:
             logger.warning("播报失败: %s", exc)

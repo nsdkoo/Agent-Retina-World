@@ -57,6 +57,33 @@ python main.py voice --download-model
 pip install vosk pyaudio SpeechRecognition pyttsx3
 ```
 
+## 自由对话（LLM）
+
+唤醒后除了固定指令，也可以**自由聊天**。未匹配到命令的语句会走 Chat 模型回复。
+
+```powershell
+python main.py demo   # 检查配置 + 启动悬浮球
+```
+
+默认模型 **gpt-5.4-mini**（codexzh），失败回退 gpt-5.4。详见 [demo-quickstart.md](demo-quickstart.md)。
+
+配置：
+
+```yaml
+chat:
+  enabled: true
+  base_url: https://api.codexzh.com/v1
+  model: gpt-5.4-mini
+  fallback_model: gpt-5.4
+  api_key_env: OPENAI_API_KEY
+  max_tokens: 256
+```
+
+示例：
+
+- 「小光，你好」→ LLM 回复 + 语音播报
+- 「帮我讲个笑话」→ 连续对话（60 秒内免唤醒）
+
 ## 支持的语音指令
 
 | 说法 | 动作 |

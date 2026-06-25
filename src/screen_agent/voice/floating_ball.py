@@ -121,7 +121,7 @@ class FloatingBallUI:
         hint = "、".join(self.assistant.wake_names[:2])
         tk.Label(
             self._popover,
-            text=f"唤醒后免唤醒连续对话\n说「{hint}，截图」",
+            text=f"唤醒后可对话，也可说「{hint}，截图」",
             fg="#8b9cb3",
             bg="#1a2332",
             font=("Segoe UI", 8),
@@ -162,4 +162,5 @@ class FloatingBallUI:
 
     def run(self) -> None:
         self.assistant.run_in_background()
+        self.root.after(300, self._toggle_popover)
         self.root.mainloop()

@@ -83,6 +83,38 @@ def cmd_serve(args: argparse.Namespace) -> None:
     run_server(args.config, host=host, port=port)
 
 
+def cmd_demo(args: argparse.Namespace) -> None:
+    from screen_agent.config import load_yaml
+    from screen_agent.understand.chat import build_chat_client, resolve_chat_api_key
+
+    raw = load_yaml(args.config)
+    chat_cfg = raw.get("chat", {})
+    voice_cfg = raw.get("voice", {})
+
+    print(f"Agent-Retina-World v{__version__} · 最小 Demo 检查")
+    print(f"  唤醒词: {', '.join(voice_cfg.get('wake_names', ['小光']))}")
+    print(f"  Chat 启用: {chat_cfg.get('enabled', False)}")
+    print(f"  模型: {chat_cfg.get('model', 'gpt-5.4-mini')} (回退 {chat_cfg.get('fallback_model', 'gpt-5.4')})")
+    print(f"  API: {chat_cfg.get('base_url', 'https://api.codexzh.com/v1')}")
+
+    key = resolve_chat_api_key(chat_cfg.get("api_key"), chat_cfg.get("api_key_env", "OPENAI_API_KEY"))
+    if key:
+        print(f"  API Key: 已找到 ({key[:8]}…)")
+    else:
+        print("  API Key: 未找到 — 请设置 OPENAI_API_KEY 或 ~/.codex/auth.json")
+
+    client = build_chat_client(chat_cfg)
+    from screen_agent.understand.chat import DisabledChatClient
+
+    if isinstance(client, DisabledChatClient):
+        print("  Chat 客户端: 未就绪")
+    else:
+        print("  Chat 客户端: 就绪")
+
+    print("\n启动悬浮球语音助手… 说「小光，你好」试试")
+    cmd_voice(args)
+
+
 def cmd_voice(args: argparse.Namespace) -> None:
     from screen_agent.config import load_yaml
     from screen_agent.voice.assistant import VoiceAssistant
@@ -143,6 +175,11 @@ def main() -> None:
     p_voice.add_argument("--ui", choices=["ball", "sidebar", "none"], default=None, help="UI 模式，默认悬浮球")
     p_voice.add_argument("--download-model", action="store_true", help="下载 Vosk 离线中文语音模型")
     p_voice.set_defaults(func=cmd_voice)
+
+    p_demo = sub.add_parser("demo", help="最小 Demo：检查配置并启动悬浮球语音助手")
+    p_demo.add_argument("--no-ui", action="store_true", help="无界面，纯后台监听")
+    p_demo.add_argument("--ui", choices=["ball", "sidebar", "none"], default=None, help="UI 模式，默认悬浮球")
+    p_demo.set_defaults(func=cmd_demo)
 
     args = parser.parse_args()
     args.config = ensure_config(args.config)

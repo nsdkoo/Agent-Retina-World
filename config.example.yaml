@@ -28,6 +28,17 @@ vlm:
   timeout: 120
   fallback_heuristic: true
 
+chat:
+  enabled: true
+  base_url: https://api.codexzh.com/v1
+  model: gpt-5.4-mini
+  fallback_model: gpt-5.4
+  api_key: ""
+  api_key_env: OPENAI_API_KEY
+  max_tokens: 256
+  max_history: 6
+  timeout: 60
+
 memory:
   db_path: data/memory/events.db
 

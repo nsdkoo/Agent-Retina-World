@@ -15,6 +15,7 @@ class IntentType(str, Enum):
     STATS = "stats"
     OPEN_WEB_UI = "open_web_ui"
     END_SESSION = "end_session"
+    CHAT = "chat"
     UNKNOWN = "unknown"
 
 
@@ -83,4 +84,4 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
         inner = help_m.group(1).strip()
         return parse_intent(inner, app_aliases, url_aliases)
 
-    return Intent(IntentType.UNKNOWN, raw_command=text)
+    return Intent(IntentType.CHAT, raw_command=text)
