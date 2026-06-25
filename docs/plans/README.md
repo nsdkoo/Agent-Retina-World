@@ -1,6 +1,26 @@
 # Plan 模式文档归档说明
 
-## 为什么要有这个目录
+## 重要：只归档 Agent-Retina-World 本项目
+
+本目录 **仅存放 Agent-Retina-World**（`D:\Agent-Retina`）的计划与过程记录。
+
+Cursor 全局 `~/.cursor/plans/` 里还有 **40+ 份其他项目** 的 Plan（简历改造、保函、辅导文档等），**那些不属于本项目，不要混进来**。
+
+---
+
+## 本项目在 Cursor Plans 里的检索结果（2026-06-25）
+
+在 `C:\Users\mi\.cursor\plans\` 共 43 个 `.plan.md` 中，**仅 1 个**属于 Agent-Retina：
+
+| 原文件 | 项目内归档 |
+| --- | --- |
+| `最小语音对话_demo_b578bbfe.plan.md` | [最小语音对话-demo.plan.md](最小语音对话-demo.plan.md) |
+
+**v0.1–v0.5 没有 Cursor Plan 原文件**（当时是 Agent 模式直接做），已在下方「过程重建」文档中补全。
+
+会话里也只出现过 **1 次** `CreatePlan`（同上，见 agent-transcripts `7107d96f-...`）。
+
+---
 
 Cursor **Plan 模式**生成的计划文件默认保存在本机：
 
@@ -44,12 +64,14 @@ C:\Users\<用户名>\.cursor\plans\*.plan.md
 
 ---
 
-## 本机 Cursor 原文件
+## 本机 Cursor Plan 原文件（仅本项目）
 
 | 标题 | 路径 | 仓库归档 |
 | --- | --- | --- |
-| 最小语音对话 Demo | `~/.cursor/plans/最小语音对话_demo_b578bbfe.plan.md` | 已归档 |
-| v0.1–v0.5 | **无** | 已过程重建 |
+| 最小语音对话 Demo | `C:\Users\mi\.cursor\plans\最小语音对话_demo_b578bbfe.plan.md` | [最小语音对话-demo.plan.md](最小语音对话-demo.plan.md) ✅ 全文 |
+| v0.1–v0.5 | **不存在** | 过程重建 plan × 6 |
+
+**其他 42 个 plan 文件**：其他项目，见 `~/.cursor/plans/` 目录列表，与本仓库无关。
 
 ---
 
