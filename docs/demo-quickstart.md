@@ -60,3 +60,7 @@ python main.py demo
 - 默认 `gpt-5.4-mini`，`max_tokens: 256`
 - 只有非命令语句才调用 LLM
 - 不使用 gpt-5.5
+
+## 项目文档
+
+完整开发过程（v0.1→v0.6、Git 时间线、简历叙事）：[development-journal.md](development-journal.md)

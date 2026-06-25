@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | L1 | 感知哈希 (pHash) | 毫秒级过滤静态/近重复帧 |
 | L2 | 直方图余弦相似度 | 布局微变但内容近似的帧 |
-| L3 | 语义 embedding（规划中） | 内容语义级去重 |
+| L3 | 语义 embedding | 基于窗口指纹/摘要向量的余弦相似度去重 |
 
 预期效果：在静态桌面场景下，VLM 调用量可下降 50% 以上。
 
@@ -61,4 +61,4 @@
 - Python 3.10+
 - mss / Pillow / imagehash
 - SQLite
-- VLM：OpenAI 兼容 API（Qwen2.5-VL 等）
+- VLM / Chat：OpenAI 兼容 API（Qwen2.5-VL、gpt-5.4-mini 等）

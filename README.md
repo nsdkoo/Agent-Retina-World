@@ -2,9 +2,31 @@
 
 **桌面屏幕世界感知 Agent** — 让 AI 理解你在电脑上做了什么，并主动提供服务。
 
-> 个人原创项目 · v0.5
+> 个人原创项目 · v0.6
 
 ![系统架构](docs/images/architecture.png)
+
+## 文档
+
+| 文档 | 说明 |
+| --- | --- |
+| [开发过程记录](docs/development-journal.md) | **版本演进、Git 时间线、简历叙事** |
+| [变更日志](docs/CHANGELOG.md) | 按版本摘要 |
+| [Plan 归档](docs/plans/README.md) | Cursor Plan 模式文档入库说明 |
+| [架构设计](docs/architecture.md) | 系统设计 |
+| [语音助手](docs/voice-assistant.md) | 唤醒、会话、指令 |
+| [Demo 试跑](docs/demo-quickstart.md) | 5 步本地验证 |
+
+## v0.6 更新 · LLM 对话 Demo
+
+```powershell
+python main.py demo                    # 配置检查 + 悬浮球
+python main.py voice --download-model  # 首次下载离线语音模型
+```
+
+- **自由对话**：未匹配命令的语句走 codexzh Chat（gpt-5.4-mini）
+- **命令优先**：截图、打开应用等仍走规则意图，节省模型成本
+- 详见 [docs/demo-quickstart.md](docs/demo-quickstart.md)
 
 ## v0.5 更新 · 免唤醒 + 离线 + 悬浮球
 
@@ -114,9 +136,11 @@ sequenceDiagram
 | 截图采集 | `capture/screen.py` | 多显示器截图，按时间戳归档 |
 | 去重 | `dedup/hasher.py` | L1 pHash + L2 直方图相似度 |
 | 页面理解 | `understand/vlm.py` | 启发式 / OpenAI 兼容 VLM |
+| LLM 对话 | `understand/chat.py` | OpenAI 兼容 Chat（codexzh） |
 | 前台上下文 | `capture/context.py` | Windows 活动窗口标题与进程 |
 | 活动聚合 | `activity/store.py` | 时间序列事件构建与 SQLite 存储 |
 | 主动服务 | `proactive/service.py` | 日报、待办、时间分布 |
+| 语音助手 | `voice/` | STT、意图、悬浮球 UI |
 | 编排 | `pipeline.py` | 全链路调度与统计 |
 
 ## 快速开始
@@ -134,6 +158,7 @@ python main.py timeline      # 查看活动时间线
 python main.py stats         # 运行与去重统计
 python main.py serve         # Web 时间线 UI
 python main.py voice         # 悬浮球语音助手（默认）
+python main.py demo          # 最小 Demo（配置检查 + voice）
 python main.py voice --ui sidebar
 python main.py voice --download-model
 python -m unittest discover -s tests
@@ -178,6 +203,7 @@ embedding:
 - [x] VLM 真实推理（OpenAI 兼容）
 - [x] Web 时间线 UI
 - [x] 语音唤醒常驻助手（呼唤名字操作）
+- [x] LLM 自由对话（codexzh gpt-5.4-mini）
 - [ ] 跨会话任务归并与证据追溯
 
 ## License
