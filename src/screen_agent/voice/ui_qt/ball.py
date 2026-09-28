@@ -32,8 +32,8 @@ from screen_agent.voice.ui_qt.toast import BubbleToast
 
 logger = logging.getLogger(__name__)
 
-BALL_SIZE = 44
-DOT_RADIUS = 16.0
+BALL_SIZE = 36
+DOT_RADIUS = 13.0
 
 # Apple Intelligence 流光配色（固定顺序，勿打乱）
 AURORA = ["#0894FF", "#C959DD", "#FF2E54", "#FF9004"]
@@ -174,7 +174,7 @@ class BallWidget(QWidget):
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
         inner_hi = QColor(255, 255, 255, int(70 * min(1.0, base_alpha)))
         painter.setPen(QPen(inner_hi, 1.0))
-        painter.drawEllipse(QPointF(cx, cy), radius - 1.6, radius - 1.6)
+        painter.drawEllipse(QPointF(cx, cy), radius - 1.4, radius - 1.4)
 
         # 空闲：中心一颗小点，表明"我在"，但不抢眼
         if not active:
@@ -182,28 +182,28 @@ class BallWidget(QWidget):
             core.setAlpha(int(120 + 80 * min(1.0, base_alpha)))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(core)
-            painter.drawEllipse(QPointF(cx, cy), 3.4 + hover * 0.9, 3.4 + hover * 0.9)
+            painter.drawEllipse(QPointF(cx, cy), 2.9 + hover * 0.8, 2.9 + hover * 0.8)
 
         # 2. 状态表达：一圈极细流光
         if self._status in ("listening", "session"):
             ring = QColor(accent)
             ring.setAlpha(int(90 + 110 * min(1.0, level * 2)))
-            painter.setPen(QPen(ring, 1.5))
-            rr = radius + 3.2 + self._breathe_phase * 1.6 + level * 3.6
+            painter.setPen(QPen(ring, 1.3))
+            rr = radius + 2.8 + self._breathe_phase * 1.4 + level * 3.2
             painter.drawEllipse(QPointF(cx, cy), rr, rr)
         elif self._status == "processing":
             arc_color = QColor(accent)
             arc_color.setAlpha(220)
-            painter.setPen(QPen(arc_color, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            halo = QRectF(cx - radius - 3.6, cy - radius - 3.6, (radius + 3.6) * 2, (radius + 3.6) * 2)
+            painter.setPen(QPen(arc_color, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            halo = QRectF(cx - radius - 3.0, cy - radius - 3.0, (radius + 3.0) * 2, (radius + 3.0) * 2)
             painter.drawArc(halo, int((self._angle * 3) % 360) * 16, 110 * 16)
         elif self._status == "speaking":
             for i in range(2):
                 phase = (now * 1.05 + i * 0.5) % 1.0
                 ripple = QColor(accent)
                 ripple.setAlpha(int((1.0 - phase) * 80))
-                painter.setPen(QPen(ripple, 1.5))
-                rr = radius + 3.0 + phase * 7.5
+                painter.setPen(QPen(ripple, 1.3))
+                rr = radius + 2.6 + phase * 6.5
                 painter.drawEllipse(QPointF(cx, cy), rr, rr)
 
         painter.end()

@@ -14,11 +14,11 @@ from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QPointF, QRectF, Qt, 
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
-MAX_W = 340
-MIN_W = 96
-PAD_X, PAD_Y = 13, 10
-RADIUS = 14
-TAIL = 7
+MAX_W = 292
+MIN_W = 84
+PAD_X, PAD_Y = 11, 8
+RADIUS = 12
+TAIL = 6
 FADE_MS = 160
 
 THEMES = {
@@ -31,7 +31,7 @@ THEMES = {
         "user_text": QColor("#ffffff"),
         "info_bg": QColor(231, 247, 239, 246),
         "info_text": QColor("#0f6b4b"),
-        "shadow": 20,
+        "shadow": 16,
     },
     "dark": {
         "bg": QColor(24, 30, 40, 240),
@@ -42,7 +42,7 @@ THEMES = {
         "user_text": QColor("#ffffff"),
         "info_bg": QColor(20, 50, 40, 240),
         "info_text": QColor("#8ce9b6"),
-        "shadow": 34,
+        "shadow": 28,
     },
 }
 
@@ -126,7 +126,7 @@ class BubbleToast(QWidget):
         from PyQt6.QtGui import QFont, QFontMetrics
 
         font = QFont()
-        font.setPixelSize(13)
+        font.setPixelSize(12)
         return QFontMetrics(font)
 
     def _relayout(self) -> None:
@@ -223,7 +223,7 @@ class BubbleToast(QWidget):
         from PyQt6.QtGui import QFont
 
         font = QFont()
-        font.setPixelSize(13)
+        font.setPixelSize(12)
         painter.setFont(font)
         painter.setPen(text_color)
         text_rect = self._text_rect.translated(TAIL if self._tail_on_left else 0, 0)
