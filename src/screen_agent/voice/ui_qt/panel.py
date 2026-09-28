@@ -71,6 +71,11 @@ STYLE = """
 #ReplyCard { background: #0d1117; border: 1px solid #232b38; border-radius: 12px; }
 #Status { color: #7d8798; font-size: 11px; }
 #ModelLabel { color: #6b7686; font-size: 11px; }
+#ModelBtn {
+    color: #9aa6b8; background: transparent; border: none;
+    font-size: 11px; padding: 2px 6px; border-radius: 6px;
+}
+#ModelBtn:hover { color: #f8fafc; background: #232b38; }
 """
 
 # 气泡样式直接写在控件上：动态加入 QScrollArea 的控件拿不到祖先样式表，
@@ -199,6 +204,9 @@ class ChatPanel(QWidget):
         on_submit_text: Callable[[str], None],
         activity_fn: Callable[[], str] | None = None,
         on_height_changed: Callable[[], None] | None = None,
+        model_options: list[str] | None = None,
+        current_model: str = "",
+        on_model_change: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(
             None,
@@ -211,6 +219,9 @@ class ChatPanel(QWidget):
         self._on_submit_text = on_submit_text
         self._activity_fn = activity_fn
         self._on_height_changed = on_height_changed
+        self._model_options = list(model_options or [])
+        self._current_model = current_model
+        self._on_model_change = on_model_change
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN + 2)
@@ -258,8 +269,10 @@ class ChatPanel(QWidget):
         self._dot.setStyleSheet("border-radius: 3px; background: #8b95a8;")
         self._status_label = QLabel("待唤醒 · 喊「小光」")
         self._status_label.setObjectName("Status")
-        self._model_label = QLabel("")
-        self._model_label.setObjectName("ModelLabel")
+        self._model_btn = QPushButton("")
+        self._model_btn.setObjectName("ModelBtn")
+        self._model_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._model_btn.clicked.connect(self._open_model_menu)
         clear_btn = QPushButton("清空")
         clear_btn.setObjectName("ClearBtn")
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -268,7 +281,7 @@ class ChatPanel(QWidget):
         meta_row.addSpacing(2)
         meta_row.addWidget(self._status_label)
         meta_row.addStretch(1)
-        meta_row.addWidget(self._model_label)
+        meta_row.addWidget(self._model_btn)
         meta_row.addWidget(clear_btn)
         root.addLayout(meta_row)
 
@@ -379,7 +392,42 @@ class ChatPanel(QWidget):
         self.add_bubble(text, "Info")
 
     def set_model_label(self, name: str) -> None:
-        self._model_label.setText(name)
+        self._current_model = name
+        if not self._model_options:
+            self._model_btn.hide()
+            return
+        self._model_btn.setText(f"{name} ▾")
+        self._model_btn.show()
+
+    def _open_model_menu(self) -> None:
+        """点模型名直接切换（不用进托盘菜单）。"""
+        from PyQt6.QtGui import QAction, QActionGroup
+        from PyQt6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #1b212b; color: #f8fafc; border: 1px solid #333c4b;"
+            " border-radius: 8px; padding: 4px; }"
+            "QMenu::item { padding: 6px 18px; border-radius: 6px; font-size: 12px; }"
+            "QMenu::item:selected { background: #2b3646; }"
+        )
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        for name in self._model_options:
+            act = QAction(name, menu)
+            act.setCheckable(True)
+            act.setChecked(name == self._current_model)
+            act.triggered.connect(lambda _checked, n=name: self._switch_model(n))
+            group.addAction(act)
+            menu.addAction(act)
+        menu.exec(self._model_btn.mapToGlobal(self._model_btn.rect().bottomLeft()))
+
+    def _switch_model(self, name: str) -> None:
+        if name == self._current_model:
+            return
+        self.set_model_label(name)
+        if self._on_model_change is not None:
+            self._on_model_change(name)
 
     def focus_input(self) -> None:
         self._input.setFocus()

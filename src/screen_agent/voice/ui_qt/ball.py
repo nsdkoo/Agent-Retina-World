@@ -7,10 +7,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import sys
 import time
+from pathlib import Path
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt6.QtGui import (
@@ -200,6 +202,34 @@ class BallWidget(QWidget):
                 self._on_click()
 
 
+def _ui_state_path() -> Path:
+    return Path(__file__).resolve().parents[4] / "data" / "ui_state.json"
+
+
+def load_preferred_model() -> str | None:
+    try:
+        data = json.loads(_ui_state_path().read_text(encoding="utf-8"))
+        return str(data.get("chat_backend") or "") or None
+    except Exception:
+        return None
+
+
+def save_preferred_model(name: str) -> None:
+    path = _ui_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        data["chat_backend"] = name
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        logger.warning("保存模型偏好失败", exc_info=True)
+
+
 class QtFloatingBall:
     """总装：悬浮球 + 输入条 + 托盘 + 全局热键 + 语音助手后台线程。"""
 
@@ -284,13 +314,34 @@ class QtFloatingBall:
         signals = AssistantSignals()
 
         level_fn = getattr(self.assistant.audio_loop, "get_level", None)
+        chat_client = getattr(self.assistant.executor, "chat_client", None)
+        switchable = hasattr(chat_client, "set_preferred")
+        if switchable:
+            saved = load_preferred_model()
+            if saved:
+                chat_client.set_preferred(saved)
+
+        def on_model_change(name: str) -> None:
+            if switchable:
+                chat_client.set_preferred(name)
+                save_preferred_model(name)
+            msg = f"对话模型已切换 → {name}"
+            if self._panel is not None:
+                self._panel.add_info(msg)
+            self.assistant.speak(msg)
+
         panel = ChatPanel(
             signals,
             on_submit_text=self._submit_text,
             activity_fn=self._recent_activity,
             on_height_changed=self._reposition_panel,
+            model_options=chat_client.backend_names if switchable else None,
+            current_model=chat_client.current_name if switchable else "",
+            on_model_change=on_model_change,
         )
         panel.setWindowOpacity(0.0)
+        if switchable:
+            panel.set_model_label(chat_client.current_name)
         self._panel = panel
         self._ball = None
         self._panel_anim = QPropertyAnimation(panel, b"windowOpacity", panel)
@@ -320,16 +371,10 @@ class QtFloatingBall:
             self.assistant.stop()
             QTimer.singleShot(300, app.quit)
 
-        chat_client = getattr(self.assistant.executor, "chat_client", None)
-        switchable = hasattr(chat_client, "set_preferred")
-        if switchable:
-            panel.set_model_label(chat_client.current_name)
-
+        # 托盘右键也能切模型（面板上点模型名是主入口）
         def on_model_switched(name: str) -> None:
             panel.set_model_label(name)
-            msg = f"对话模型已切换 → {name}"
-            panel.add_info(msg)
-            self.assistant.speak(msg)
+            on_model_change(name)
 
         tray = TrayIcon(
             ball,
