@@ -74,7 +74,16 @@ def set_autostart(enabled: bool) -> bool:
 
 
 class TrayIcon(QSystemTrayIcon):
-    def __init__(self, ball_widget, on_exit, on_toggle_panel=None, chat_client=None, on_model_switched=None) -> None:
+    def __init__(
+        self,
+        ball_widget,
+        on_exit,
+        on_toggle_panel=None,
+        chat_client=None,
+        on_model_switched=None,
+        theme_choice: str = "auto",
+        on_theme_change=None,
+    ) -> None:
         super().__init__(_make_icon())
         self._ball = ball_widget
         menu = QMenu()
@@ -105,7 +114,21 @@ class TrayIcon(QSystemTrayIcon):
                 )
                 group.addAction(act)
                 model_menu.addAction(act)
-            menu.addMenu(model_menu)
+            menu.addSeparator()
+
+        if on_theme_change is not None:
+            from PyQt6.QtGui import QActionGroup
+
+            theme_menu = menu.addMenu("外观")
+            theme_group = QActionGroup(menu)
+            theme_group.setExclusive(True)
+            for label, value in (("跟随系统", "auto"), ("浅色", "light"), ("深色", "dark")):
+                act = QAction(label, theme_menu)
+                act.setCheckable(True)
+                act.setChecked(value == theme_choice)
+                act.triggered.connect(lambda _checked, v=value: on_theme_change(v))
+                theme_group.addAction(act)
+                theme_menu.addAction(act)
             menu.addSeparator()
 
         self._autostart_action = QAction("开机自启", menu)
@@ -120,7 +143,7 @@ class TrayIcon(QSystemTrayIcon):
         menu.addAction(act_exit)
 
         self.setContextMenu(menu)
-        self.setToolTip("Agent-Retina 语音助手 · 喊「小光」唤醒")
+        self.setToolTip("Agent-Retina 语音助手 · 喊「瑞塔」或 Alt+Space")
         self.activated.connect(self._on_activated)
 
     def _switch_model(self, name: str, chat_client, on_model_switched) -> None:

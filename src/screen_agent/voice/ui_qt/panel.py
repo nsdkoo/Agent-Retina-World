@@ -1,7 +1,7 @@
-"""输入交互：Spotlight 式紧凑浮条 + 按需生长的回复卡。
+"""输入交互：Spotlight 式紧凑浮条 + 按需生长的回复卡（浅色/深色双主题）。
 
 形态借鉴 Raycast / Spotlight / ChatGPT 桌面伴侣窗（紧凑、按需生长、键盘优先），
-视觉用自己的语言：深海军蓝玻璃面 + 流光点睛（顶部细条与焦点描边），
+视觉用自己的语言：柔和玻璃面 + 流光点睛（顶部细条、聚焦描边），
 投影手绘（不用 QGraphicsDropShadowEffect——它会把自绘文字一起栅格化发糊）。
 """
 
@@ -24,87 +24,137 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-PANEL_W = 420              # 卡片内容宽度
-SHADOW_MARGIN = 14         # 窗口留给手绘投影的边距
+PANEL_W = 420              # 窗口宽（含投影边距）
+SHADOW_MARGIN = 14
 INPUT_MIN_H = 44
 INPUT_MAX_H = 132          # 约 6 行
 REPLY_MAX_H = 260          # 回复卡限高，超出内部滚动
 LONG_TEXT_THRESHOLD = 400  # 超过这么多字折叠成 chip
 CHIP_TEMPLATE = "[已粘贴长文 {n} 字 · 回车发送]"
 
-STYLE = """
-#Panel {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #171c25, stop:1 #11151c);
-    border: 1px solid #333c4b;
-    border-radius: 16px;
+THEMES = {
+    "dark": {
+        "panel_top": "#2a3140",
+        "panel_bottom": "#1e242e",
+        "panel_border": "#3d4757",
+        "panel_border_focus": "#5b6a83",
+        "text": "#f5f8fc",
+        "sub": "#a3aebf",
+        "muted": "#78849a",
+        "reply_bg": "#1a212b",
+        "reply_border": "#2b3441",
+        "bubble_bot_bg": "#2b3442",
+        "bubble_bot_border": "#3a455a",
+        "bubble_info_bg": "#17372c",
+        "bubble_info_border": "#245440",
+        "bubble_info_text": "#8ce9b6",
+        "btn_hover_bg": "#333d4d",
+        "shadow_alpha": 26,
+    },
+    "light": {
+        "panel_top": "#ffffff",
+        "panel_bottom": "#f6f8fc",
+        "panel_border": "#dde4ef",
+        "panel_border_focus": "#9db4d6",
+        "text": "#1b2330",
+        "sub": "#5c6a7d",
+        "muted": "#8d99ab",
+        "reply_bg": "#f3f6fb",
+        "reply_border": "#e2e8f2",
+        "bubble_bot_bg": "#e9eef7",
+        "bubble_bot_border": "#d7dfec",
+        "bubble_info_bg": "#e7f7ef",
+        "bubble_info_border": "#c6e9d9",
+        "bubble_info_text": "#116b4b",
+        "btn_hover_bg": "#eef2f9",
+        "shadow_alpha": 18,
+    },
 }
-#Panel[focused="true"] { border: 1px solid #4c5b73; }
-#InputBox {
-    background: transparent; color: #f8fafc;
-    border: none; padding: 10px 4px 10px 12px; font-size: 14px;
-    selection-background-color: #3b82f6;
-}
-#SendBtn {
-    color: #ffffff; background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #2563eb, stop:1 #7c3aed);
-    border: none; border-radius: 14px; font-size: 13px;
-    min-width: 54px; max-width: 54px; min-height: 30px; max-height: 30px;
-}
-#SendBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #3b82f6, stop:1 #8b5cf6); }
-#CloseBtn {
-    color: #6b7686; background: transparent; border: none;
-    font-size: 12px; max-width: 20px; max-height: 20px;
-}
-#CloseBtn:hover { color: #f8fafc; }
-#ClearBtn {
-    color: #6b7686; background: transparent; border: none; font-size: 11px;
-}
-#ClearBtn:hover { color: #c084fc; }
-#Strip {
-    border-radius: 1px;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #0894FF, stop:0.35 #C959DD, stop:0.7 #FF2E54, stop:1 #FF9004);
-    max-height: 2px;
-}
-#ReplyCard { background: #0d1117; border: 1px solid #232b38; border-radius: 12px; }
-#Status { color: #7d8798; font-size: 11px; }
-#ModelLabel { color: #6b7686; font-size: 11px; }
-#ModelBtn {
-    color: #9aa6b8; background: transparent; border: none;
-    font-size: 11px; padding: 2px 6px; border-radius: 6px;
-}
-#ModelBtn:hover { color: #f8fafc; background: #232b38; }
-"""
 
-# 气泡样式直接写在控件上：动态加入 QScrollArea 的控件拿不到祖先样式表，
-# 依赖级联会出现「用户气泡没底色」这类偶发失效。
-BUBBLE_STYLES = {
-    "User": (
-        "QLabel { color: #f8fafc; font-size: 13px; padding: 8px 11px;"
-        " background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #4f46e5);"
-        " border-radius: 11px; border-bottom-right-radius: 4px; margin-left: 56px; }"
-    ),
-    "Bot": (
-        "QLabel { color: #f8fafc; font-size: 13px; padding: 8px 11px;"
-        " background: #212936; border: 1px solid #2f3949;"
-        " border-radius: 11px; border-bottom-left-radius: 4px; margin-right: 56px; }"
-    ),
-    "Info": (
-        "QLabel { color: #86efac; font-size: 12px; padding: 8px 11px;"
-        " background: #14322a; border: 1px solid #1f4a3c;"
-        " border-radius: 9px; margin: 0 30px; }"
-    ),
-}
+AURORA_STRIP = (
+    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+    " stop:0 #0894FF, stop:0.35 #C959DD, stop:0.7 #FF2E54, stop:1 #FF9004);"
+)
 
 DOT_COLORS = {
     "idle": "#8b95a8",
     "listening": "#34d399",
-    "processing": "#60a5fa",
-    "speaking": "#c084fc",
+    "processing": "#3b82f6",
+    "speaking": "#a855f7",
     "session": "#34d399",
 }
+
+
+def build_style(theme: str) -> str:
+    t = THEMES.get(theme, THEMES["light"])
+    return f"""
+#Panel {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 {t['panel_top']}, stop:1 {t['panel_bottom']});
+    border: 1px solid {t['panel_border']};
+    border-radius: 16px;
+}}
+#InputBox {{
+    background: transparent; color: {t['text']};
+    border: none; padding: 10px 4px 10px 12px; font-size: 14px;
+    selection-background-color: #3b82f6; selection-color: #ffffff;
+}}
+#SendBtn {{
+    color: #ffffff;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #7c3aed);
+    border: none; border-radius: 14px; font-size: 13px;
+    min-width: 54px; max-width: 54px; min-height: 30px; max-height: 30px;
+}}
+#SendBtn:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3b82f6, stop:1 #8b5cf6);
+}}
+#CloseBtn {{
+    color: {t['muted']}; background: transparent; border: none;
+    font-size: 12px; max-width: 20px; max-height: 20px;
+}}
+#CloseBtn:hover {{ color: {t['text']}; }}
+#ClearBtn {{ color: {t['muted']}; background: transparent; border: none; font-size: 11px; }}
+#ClearBtn:hover {{ color: #7c3aed; }}
+#ModelBtn {{
+    color: {t['sub']}; background: transparent; border: none;
+    font-size: 11px; padding: 2px 6px; border-radius: 6px;
+}}
+#ModelBtn:hover {{ color: {t['text']}; background: {t['btn_hover_bg']}; }}
+#Strip {{ border-radius: 1px; {AURORA_STRIP} max-height: 2px; }}
+#ReplyCard {{ background: {t['reply_bg']}; border: 1px solid {t['reply_border']}; border-radius: 12px; }}
+#Status {{ color: {t['sub']}; font-size: 11px; }}
+"""
+
+
+def build_bubble_style(kind: str, theme: str) -> str:
+    t = THEMES.get(theme, THEMES["light"])
+    if kind == "User":
+        return (
+            "QLabel { color: #ffffff; font-size: 13px; padding: 8px 11px;"
+            " background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #4f46e5);"
+            " border-radius: 11px; border-bottom-right-radius: 4px; margin-left: 56px; }"
+        )
+    if kind == "Info":
+        return (
+            f"QLabel {{ color: {t['bubble_info_text']}; font-size: 12px; padding: 8px 11px;"
+            f" background: {t['bubble_info_bg']}; border: 1px solid {t['bubble_info_border']};"
+            " border-radius: 9px; margin: 0 30px; }"
+        )
+    return (
+        f"QLabel {{ color: {t['text']}; font-size: 13px; padding: 8px 11px;"
+        f" background: {t['bubble_bot_bg']}; border: 1px solid {t['bubble_bot_border']};"
+        " border-radius: 11px; border-bottom-left-radius: 4px; margin-right: 56px; }"
+    )
+
+
+def build_menu_style(theme: str) -> str:
+    t = THEMES.get(theme, THEMES["light"])
+    return (
+        f"QMenu {{ background: {t['panel_top']}; color: {t['text']};"
+        f" border: 1px solid {t['panel_border']}; border-radius: 8px; padding: 4px; }}"
+        f"QMenu::item {{ padding: 6px 18px; border-radius: 6px; font-size: 12px; }}"
+        f"QMenu::item:selected {{ background: {t['btn_hover_bg']}; }}"
+    )
 
 
 class InputEdit(QTextEdit):
@@ -134,16 +184,12 @@ class InputEdit(QTextEdit):
         super().focusOutEvent(event)
         self.focus_changed.emit(False)
 
-    # ---- 高度自适应 ----
-
     def _adjust_height(self) -> None:
         doc_h = int(self.document().size().height()) + 22
         target = max(INPUT_MIN_H, min(INPUT_MAX_H, doc_h))
         if target != self.height():
             self.setFixedHeight(target)
             self.height_changed.emit()
-
-    # ---- 长文折叠 ----
 
     def insertFromMimeData(self, source) -> None:  # noqa: N802
         text = source.text() or ""
@@ -156,7 +202,6 @@ class InputEdit(QTextEdit):
         self._adjust_height()
 
     def payload(self) -> str:
-        """取真正要发送的内容（长文 chip 还原为原文）。"""
         if self._long_text is not None:
             return self._long_text
         return self.toPlainText().strip()
@@ -166,8 +211,6 @@ class InputEdit(QTextEdit):
         self.clear()
         self.setFixedHeight(INPUT_MIN_H)
         self.height_changed.emit()
-
-    # ---- 键盘 ----
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
@@ -183,10 +226,10 @@ class InputEdit(QTextEdit):
         super().keyPressEvent(event)
 
 
-def _bubble(text: str, kind: str) -> QLabel:
+def _bubble(text: str, kind: str, theme: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName(f"Bubble{kind}")
-    label.setStyleSheet(BUBBLE_STYLES.get(kind, BUBBLE_STYLES["Bot"]))
+    label.setStyleSheet(build_bubble_style(kind, theme))
     label.setWordWrap(True)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
@@ -207,6 +250,8 @@ class ChatPanel(QWidget):
         model_options: list[str] | None = None,
         current_model: str = "",
         on_model_change: Callable[[str], None] | None = None,
+        theme: str = "light",
+        wake_hint: str = "喊「瑞塔」",
     ) -> None:
         super().__init__(
             None,
@@ -215,13 +260,15 @@ class ChatPanel(QWidget):
             | Qt.WindowType.Tool,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setStyleSheet(STYLE)
+        self._theme = theme
+        self.setStyleSheet(build_style(theme))
         self._on_submit_text = on_submit_text
         self._activity_fn = activity_fn
         self._on_height_changed = on_height_changed
         self._model_options = list(model_options or [])
         self._current_model = current_model
         self._on_model_change = on_model_change
+        self._wake_hint = wake_hint
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN + 2)
@@ -234,13 +281,11 @@ class ChatPanel(QWidget):
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(6)
 
-        # 顶部流光细条（品牌点睛，克制）
         strip = QLabel()
         strip.setObjectName("Strip")
         strip.setFixedHeight(2)
         root.addWidget(strip)
 
-        # ---- 输入行 ----
         input_row = QHBoxLayout()
         input_row.setSpacing(6)
         self._input = InputEdit()
@@ -261,13 +306,12 @@ class ChatPanel(QWidget):
         input_row.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(input_row)
 
-        # ---- 状态行 ----
         meta_row = QHBoxLayout()
         meta_row.setSpacing(6)
         self._dot = QLabel()
         self._dot.setFixedSize(7, 7)
         self._dot.setStyleSheet("border-radius: 3px; background: #8b95a8;")
-        self._status_label = QLabel("待唤醒 · 喊「小光」")
+        self._status_label = QLabel(f"待唤醒 · {wake_hint}")
         self._status_label.setObjectName("Status")
         self._model_btn = QPushButton("")
         self._model_btn.setObjectName("ModelBtn")
@@ -285,12 +329,11 @@ class ChatPanel(QWidget):
         meta_row.addWidget(clear_btn)
         root.addLayout(meta_row)
 
-        # ---- 回复卡（默认隐藏）----
         self._scroll = QScrollArea()
         self._scroll.setObjectName("ReplyCard")
         self._scroll.setWidgetResizable(True)
         inner = QWidget()
-        inner.setStyleSheet("background: #0d1117;")
+        inner.setObjectName("ReplyInner")
         self._chat_flow = QVBoxLayout(inner)
         self._chat_flow.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._chat_flow.setSpacing(6)
@@ -301,7 +344,6 @@ class ChatPanel(QWidget):
         self._scroll.hide()
         root.addWidget(self._scroll)
 
-        # ---- 最近屏幕活动：极简一行 ----
         self._activity = QLabel("")
         self._activity.setObjectName("Status")
         self._activity.hide()
@@ -320,7 +362,24 @@ class ChatPanel(QWidget):
         self._activity_timer.timeout.connect(self._refresh_activity)
         self._activity_timer.start(30000)
 
+        self.set_theme(theme)
         self._relayout()
+
+    # ---- 主题 ----
+
+    def set_theme(self, theme: str) -> None:
+        self._theme = theme
+        self.setStyleSheet(build_style(theme))
+        t = THEMES.get(theme, THEMES["light"])
+        inner = self._scroll.widget()
+        if inner is not None:
+            inner.setStyleSheet(f"background: {t['reply_bg']};")
+        for i in range(self._chat_flow.count()):
+            widget = self._chat_flow.itemAt(i).widget()
+            if isinstance(widget, QLabel):
+                kind = widget.objectName().replace("Bubble", "") or "Bot"
+                widget.setStyleSheet(build_bubble_style(kind, theme))
+        self._on_input_focus(self._input.hasFocus())
 
     # ---- 手绘投影（真实层次，且不糊文字）----
 
@@ -330,11 +389,11 @@ class ChatPanel(QWidget):
         card = self.rect().adjusted(
             SHADOW_MARGIN, SHADOW_MARGIN, -SHADOW_MARGIN, -(SHADOW_MARGIN + 2)
         )
+        base_alpha = THEMES.get(self._theme, THEMES["light"])["shadow_alpha"]
         for i in range(6):
             spread = 6 - i
-            alpha = 8 + i * 5
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.setBrush(QColor(0, 0, 0, int(base_alpha * (0.35 + i * 0.12))))
             path = QPainterPath()
             path.addRoundedRect(
                 float(card.left() - spread), float(card.top() - spread + 3),
@@ -345,15 +404,17 @@ class ChatPanel(QWidget):
         painter.end()
 
     def _on_input_focus(self, focused: bool) -> None:
-        self._frame.setProperty("focused", "true" if focused else "false")
+        t = THEMES.get(self._theme, THEMES["light"])
+        color = t["panel_border_focus"] if focused else t["panel_border"]
         self._frame.setStyleSheet(
-            "#Panel { border: 1px solid %s; }" % ("#4c5b73" if focused else "#333c4b")
+            f"#Panel {{ border: 1px solid {color}; border-radius: 16px;"
+            f" background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            f" stop:0 {t['panel_top']}, stop:1 {t['panel_bottom']}); }}"
         )
 
     # ---- 高度自适应 ----
 
     def _relayout(self) -> None:
-        """按内容重算高度：输入条 + （有回复时的回复卡）。无内容时只有一行高。"""
         reply_h = self._scroll.height() if self._reply_visible else 0
         activity_h = self._activity.sizeHint().height() if self._activity_visible else 0
         meta_h = max(16, self._status_label.sizeHint().height())
@@ -383,7 +444,9 @@ class ChatPanel(QWidget):
     def add_bubble(self, text: str, kind: str) -> None:
         if not text:
             return
-        self._chat_flow.addWidget(_bubble(text, kind), alignment=Qt.AlignmentFlag.AlignTop)
+        self._chat_flow.addWidget(
+            _bubble(text, kind, self._theme), alignment=Qt.AlignmentFlag.AlignTop
+        )
         bar = self._scroll.verticalScrollBar()
         QTimer.singleShot(30, lambda: bar.setValue(bar.maximum()))
         QTimer.singleShot(0, self._grow_reply_card)
@@ -400,17 +463,12 @@ class ChatPanel(QWidget):
         self._model_btn.show()
 
     def _open_model_menu(self) -> None:
-        """点模型名直接切换（不用进托盘菜单）。"""
+        """点模型名直接切换（不必进托盘菜单）。"""
         from PyQt6.QtGui import QAction, QActionGroup
         from PyQt6.QtWidgets import QMenu
 
         menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background: #1b212b; color: #f8fafc; border: 1px solid #333c4b;"
-            " border-radius: 8px; padding: 4px; }"
-            "QMenu::item { padding: 6px 18px; border-radius: 6px; font-size: 12px; }"
-            "QMenu::item:selected { background: #2b3646; }"
-        )
+        menu.setStyleSheet(build_menu_style(self._theme))
         group = QActionGroup(menu)
         group.setExclusive(True)
         for name in self._model_options:
@@ -447,11 +505,18 @@ class ChatPanel(QWidget):
 
     def _on_status(self, status: str) -> None:
         mapping = {
-            "idle": "待唤醒 · 喊「小光」",
+            "idle": f"待唤醒 · {self._wake_hint}",
             "listening": "正在听…",
             "processing": "思考中…",
             "speaking": "播报中…",
             "session": "连续对话中",
+        }
+        dot_colors = {
+            "idle": "#8b95a8",
+            "listening": "#34d399",
+            "processing": "#60a5fa",
+            "speaking": "#c084fc",
+            "session": "#34d399",
         }
         self._status_label.setText(mapping.get(status, status))
         color = DOT_COLORS.get(status, "#8b95a8")
@@ -484,7 +549,6 @@ class ChatPanel(QWidget):
     # ---- 提交 ----
 
     def _handle_escape(self) -> None:
-        """Esc：有内容先清空，空了再收起。"""
         if self._input.payload():
             self._input.clear_all()
         else:

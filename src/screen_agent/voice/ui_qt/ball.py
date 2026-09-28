@@ -206,28 +206,51 @@ def _ui_state_path() -> Path:
     return Path(__file__).resolve().parents[4] / "data" / "ui_state.json"
 
 
-def load_preferred_model() -> str | None:
+def load_ui_state() -> dict:
     try:
-        data = json.loads(_ui_state_path().read_text(encoding="utf-8"))
-        return str(data.get("chat_backend") or "") or None
+        return json.loads(_ui_state_path().read_text(encoding="utf-8"))
     except Exception:
-        return None
+        return {}
 
 
-def save_preferred_model(name: str) -> None:
+def save_ui_state(**kwargs) -> None:
     path = _ui_state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {}
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                data = {}
-        data["chat_backend"] = name
+        data = load_ui_state()
+        data.update(kwargs)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
-        logger.warning("保存模型偏好失败", exc_info=True)
+        logger.warning("保存界面状态失败", exc_info=True)
+
+
+def load_preferred_model() -> str | None:
+    return str(load_ui_state().get("chat_backend") or "") or None
+
+
+def save_preferred_model(name: str) -> None:
+    save_ui_state(chat_backend=name)
+
+
+def detect_system_theme() -> str:
+    """Windows 应用主题：1=浅色，0=深色。"""
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        return "light" if int(value) == 1 else "dark"
+    except Exception:
+        return "light"
+
+
+def resolve_theme(choice: str) -> str:
+    if choice in ("light", "dark"):
+        return choice
+    return detect_system_theme()
 
 
 class QtFloatingBall:
@@ -321,6 +344,16 @@ class QtFloatingBall:
             if saved:
                 chat_client.set_preferred(saved)
 
+        state = load_ui_state()
+        theme_choice = str(state.get("theme") or "auto")  # auto | light | dark
+        wake_hint = "喊「瑞塔」"
+        try:
+            chinese = [w for w in self.assistant.wake_names if not w.isascii()]
+            if chinese:
+                wake_hint = f"喊「{chinese[0]}」"
+        except Exception:
+            pass
+
         def on_model_change(name: str) -> None:
             if switchable:
                 chat_client.set_preferred(name)
@@ -330,6 +363,11 @@ class QtFloatingBall:
                 self._panel.add_info(msg)
             self.assistant.speak(msg)
 
+        def on_theme_change(choice: str) -> None:
+            save_ui_state(theme=choice)
+            if self._panel is not None:
+                self._panel.set_theme(resolve_theme(choice))
+
         panel = ChatPanel(
             signals,
             on_submit_text=self._submit_text,
@@ -338,6 +376,8 @@ class QtFloatingBall:
             model_options=chat_client.backend_names if switchable else None,
             current_model=chat_client.current_name if switchable else "",
             on_model_change=on_model_change,
+            theme=resolve_theme(theme_choice),
+            wake_hint=wake_hint,
         )
         panel.setWindowOpacity(0.0)
         if switchable:
@@ -382,6 +422,8 @@ class QtFloatingBall:
             on_toggle_panel=lambda: self._toggle_panel(panel, ball),
             chat_client=chat_client if switchable else None,
             on_model_switched=on_model_switched if switchable else None,
+            theme_choice=theme_choice,
+            on_theme_change=on_theme_change,
         )
         tray.show()
         ball.show()

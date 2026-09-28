@@ -21,17 +21,17 @@
 
 ```powershell
 python main.py voice --download-model   # 下载 sherpa 模型套件（ASR/KWS/TTS，约 450MB）
-python main.py voice                    # Qt 悬浮球（默认）
+python main.py voice                    # Qt 悬浮球（默认，Alt+Space 唤出输入条）
 ```
 
 - **流式离线语音**：sherpa-onnx zipformer 双语模型，边说边识别（10s 音频 0.6s 出稿），彻底替换 Vosk 整段听写
-- **真·关键词唤醒**：sherpa KWS 模型 spotting「小光/光光」，唤醒词由 pypinyin 自动生成（`x iǎo g uāng @小光`），待机 CPU <5%
+- **真·关键词唤醒**：sherpa KWS 模型 spotting「瑞塔/小光/光光」（`r uì t ǎ @瑞塔`，pypinyin 自动生成 + 拼音缩写规则），待机 CPU <5%
 - **自然音色 TTS**：vits 中文女声替换 pyttsx3 机器音，播报在独立线程且自动屏蔽麦克风防回环
 - **音量呼吸环**：悬浮球光环随说话音量实时起伏
 - **PyQt6 悬浮球**：Apple Intelligence 风格流光玻璃球；**Alt+Space 唤出 Spotlight 式紧凑输入条**（空闲仅一行高，有回复才生长出回复卡，长文粘贴自动折叠）；系统托盘 + 开机自启
 - **打字 + 语音双输入**：面板打字与语音共用 `handle_command`，意图/对话历史/播报全共享
 - **对话多后端**：`chat.backends` 按序探测——本地 vLLM（千问系列）优先，DeepSeek API 兜底，旧单后端配置兼容
-- **「小光，截图」一句话直达**：唤醒词命中后回放 3 秒音频缓冲，唤醒词和命令一句话说完
+- **「瑞塔，截图」一句话直达**：唤醒词命中后回放 3 秒音频缓冲，唤醒词和命令一句话说完
 
 ## v0.6 更新 · LLM 对话 Demo
 
@@ -63,7 +63,7 @@ python main.py voice                    # 默认悬浮球 UI
 python main.py voice
 ```
 
-说 **「小光，截图」** · **「Retina，打开百度」** · **「小光，分析屏幕」**
+说 **「瑞塔，截图」** · **「小光，打开百度」** · **「瑞塔，分析屏幕」**
 
 桌面右侧常驻侧边栏，麦克风聆听 + 语音播报反馈。详见 [docs/voice-assistant.md](docs/voice-assistant.md)
 

@@ -192,8 +192,17 @@ class SherpaTts:
         return audio.samples, audio.sample_rate
 
 
+def _contract_final(final: str) -> list[str]:
+    """生成拼音缩写式候选：kws 模型的韵母表用 uì/uí 这类缩写（uei→ui、iou→iu、uen→un）。"""
+    variants = [final]
+    for full, short in (("ue", "u"), ("io", "i"), ("uen", "un")):
+        if final.startswith(full):
+            variants.append(short + final[len(full):])
+    return list(dict.fromkeys(variants))
+
+
 def _py_initial_final(char: str) -> list[tuple[str, str]]:
-    """返回一个汉字的 (声母, 带调韵母) 候选列表。"""
+    """返回一个汉字的 (声母, 带调韵母) 候选列表（含缩写式）。"""
     from pypinyin import lazy_pinyin, Style
 
     candidates: list[tuple[str, str]] = []
@@ -201,10 +210,13 @@ def _py_initial_final(char: str) -> list[tuple[str, str]]:
     finals_tone = lazy_pinyin(char, style=Style.FINALS_TONE)
     finals_tone3 = lazy_pinyin(char, style=Style.FINALS_TONE3)
     for i, initial in enumerate(initials):
+        finals: list[str] = []
         if i < len(finals_tone):
-            candidates.append((initial, finals_tone[i]))
+            finals.extend(_contract_final(finals_tone[i]))
         if i < len(finals_tone3):
-            candidates.append((initial, finals_tone3[i]))
+            finals.extend(_contract_final(finals_tone3[i]))
+        for final in dict.fromkeys(finals):
+            candidates.append((initial, final))
     return candidates
 
 
