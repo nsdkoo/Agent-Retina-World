@@ -116,26 +116,50 @@ class MultiBackendChatClient:
         if not backends:
             raise ValueError("MultiBackendChatClient 需要至少一个后端")
         self.backends = backends
+        self.preferred: str | None = None  # backend name，None=按配置顺序
 
     @property
     def names(self) -> list[str]:
         return [f"{b.base_url}:{b.model}" for b in self.backends]
 
+    @property
+    def backend_names(self) -> list[str]:
+        return [getattr(b, "name", "") or b.model for b in self.backends]
+
+    @property
+    def current_name(self) -> str:
+        return self.preferred or self.backend_names[0]
+
+    def set_preferred(self, name: str) -> bool:
+        """运行时切换偏好后端；preferred 失败仍按配置顺序回退。"""
+        if name in self.backend_names:
+            self.preferred = name
+            return True
+        return False
+
+    def _ordered(self) -> list[OpenAICompatibleChatClient]:
+        if not self.preferred:
+            return list(self.backends)
+        preferred = [b for b in self.backends if getattr(b, "name", "") == self.preferred]
+        rest = [b for b in self.backends if getattr(b, "name", "") != self.preferred]
+        return preferred + rest
+
     def complete(self, messages: list[dict[str, str]], system: str | None = None) -> str:
+        ordered = self._ordered()
         last_error: Exception | None = None
-        for i, backend in enumerate(self.backends):
+        for i, backend in enumerate(ordered):
             try:
                 return backend.complete(messages, system=system)
             except Exception as exc:
                 last_error = exc
-                remaining = len(self.backends) - i - 1
+                remaining = len(ordered) - i - 1
                 if remaining:
                     logger.warning(
                         "Chat 后端 %s 失败，切换下一个（剩 %d 个）: %s",
-                        backend.base_url, remaining, exc,
+                        getattr(backend, "name", backend.base_url), remaining, exc,
                     )
                 else:
-                    logger.warning("Chat 后端 %s 失败（已是最后一个）: %s", backend.base_url, exc)
+                    logger.warning("Chat 后端 %s 失败（已是最后一个）: %s", getattr(backend, "name", backend.base_url), exc)
         if last_error:
             raise last_error
         raise RuntimeError("Chat 请求失败")
@@ -146,7 +170,7 @@ def _build_backend(entry: dict[str, Any], default_max_tokens: int, default_timeo
     if not api_key:
         env_name = entry.get("api_key_env") or ""
         api_key = os.environ.get(env_name, "").strip() if env_name else ""
-    return OpenAICompatibleChatClient(
+    client = OpenAICompatibleChatClient(
         base_url=str(entry.get("base_url", "")),
         model=str(entry.get("model", "")),
         api_key=api_key,
@@ -154,6 +178,8 @@ def _build_backend(entry: dict[str, Any], default_max_tokens: int, default_timeo
         max_tokens=int(entry.get("max_tokens", default_max_tokens)),
         timeout=float(entry.get("timeout", default_timeout)),
     )
+    client.name = str(entry.get("name", entry.get("model", "")))  # type: ignore[attr-defined]
+    return client
 
 
 def build_chat_client(chat_cfg: dict[str, Any]) -> OpenAICompatibleChatClient | MultiBackendChatClient | DisabledChatClient:

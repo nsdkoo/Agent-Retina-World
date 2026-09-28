@@ -74,7 +74,7 @@ def set_autostart(enabled: bool) -> bool:
 
 
 class TrayIcon(QSystemTrayIcon):
-    def __init__(self, ball_widget, on_exit, on_toggle_panel=None) -> None:
+    def __init__(self, ball_widget, on_exit, on_toggle_panel=None, chat_client=None, on_model_switched=None) -> None:
         super().__init__(_make_icon())
         self._ball = ball_widget
         menu = QMenu()
@@ -90,6 +90,24 @@ class TrayIcon(QSystemTrayIcon):
 
         menu.addSeparator()
 
+        if chat_client is not None and hasattr(chat_client, "set_preferred"):
+            model_menu = menu.addMenu("对话模型")
+            from PyQt6.QtGui import QActionGroup
+
+            group = QActionGroup(menu)
+            group.setExclusive(True)
+            for name in chat_client.backend_names:
+                act = QAction(name, model_menu)
+                act.setCheckable(True)
+                act.setChecked(name == chat_client.current_name)
+                act.triggered.connect(
+                    lambda _checked, n=name: self._switch_model(n, chat_client, on_model_switched)
+                )
+                group.addAction(act)
+                model_menu.addAction(act)
+            menu.addMenu(model_menu)
+            menu.addSeparator()
+
         self._autostart_action = QAction("开机自启", menu)
         self._autostart_action.setCheckable(True)
         self._autostart_action.setChecked(is_autostart_enabled())
@@ -104,6 +122,11 @@ class TrayIcon(QSystemTrayIcon):
         self.setContextMenu(menu)
         self.setToolTip("Agent-Retina 语音助手 · 喊「小光」唤醒")
         self.activated.connect(self._on_activated)
+
+    def _switch_model(self, name: str, chat_client, on_model_switched) -> None:
+        ok = chat_client.set_preferred(name)
+        if ok and on_model_switched is not None:
+            on_model_switched(name)
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:

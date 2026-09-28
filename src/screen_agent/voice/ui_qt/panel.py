@@ -104,6 +104,10 @@ class ChatPanel(QWidget):
         header.addWidget(dot)
         header.addSpacing(6)
         header.addWidget(title)
+        self._model_label = QLabel()
+        self._model_label.setObjectName("Status")
+        header.addSpacing(8)
+        header.addWidget(self._model_label)
         header.addStretch(1)
         header.addWidget(self._status_label)
         root.addLayout(header)
@@ -173,6 +177,9 @@ class ChatPanel(QWidget):
             f"#Dot {{ border-radius: 4px; background: {dot_colors.get(status, '#8b95a8')}; "
             f"max-width: 8px; max-height: 8px; }}"
         )
+
+    def set_model_label(self, name: str) -> None:
+        self._model_label.setText(name)
 
     def _refresh_activity(self) -> None:
         if self._activity_fn is None:

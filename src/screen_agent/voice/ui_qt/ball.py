@@ -259,7 +259,24 @@ class QtFloatingBall:
             self.assistant.stop()
             QTimer.singleShot(300, app.quit)
 
-        tray = TrayIcon(ball, on_exit=on_exit, on_toggle_panel=lambda: self._toggle_panel(panel, ball))
+        chat_client = getattr(self.assistant.executor, "chat_client", None)
+        switchable = hasattr(chat_client, "set_preferred")
+        if switchable:
+            panel.set_model_label(chat_client.current_name)
+
+        def on_model_switched(name: str) -> None:
+            panel.set_model_label(name)
+            msg = f"对话模型已切换 → {name}"
+            panel.add_info(msg)
+            self.assistant.speak(msg)
+
+        tray = TrayIcon(
+            ball,
+            on_exit=on_exit,
+            on_toggle_panel=lambda: self._toggle_panel(panel, ball),
+            chat_client=chat_client if switchable else None,
+            on_model_switched=on_model_switched if switchable else None,
+        )
         tray.show()
         ball.show()
 

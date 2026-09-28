@@ -29,24 +29,35 @@ vlm:
   fallback_heuristic: true
 
 # 对话模型：多后端按序探测，前一个失败自动切下一个
+# 云端 DeepSeek（官方 OpenAI 兼容，key 见 platform.deepseek.com）
+# 云端 智谱 GLM（open.bigmodel.cn，glm-4.7-flash 免费、高峰易限流，glm-4-flash 稳定兜底）
 # 本地 = vLLM 部署千问系列（企业标准 serving）：vllm serve Qwen/Qwen2.5-7B-Instruct --port 8000
-# 云端 = DeepSeek API（需设置环境变量 DEEPSEEK_API_KEY）
 chat:
   enabled: true
   max_tokens: 256
   max_history: 6
   timeout: 60
   backends:
-    - name: local-vllm-qwen
-      base_url: http://127.0.0.1:8000/v1
-      model: Qwen/Qwen2.5-7B-Instruct   # 千问系列，可按机器配置换其他 Qwen 规格
-      api_key: ""
-      api_key_env: ""
-    - name: deepseek
+    - name: deepseek-flash
       base_url: https://api.deepseek.com
-      model: deepseek-chat
+      model: deepseek-flash              # DeepSeek-V4.1-Flash
       api_key: ""
       api_key_env: DEEPSEEK_API_KEY
+    - name: glm-4.7-flash
+      base_url: https://open.bigmodel.cn/api/paas/v4
+      model: glm-4.7-flash
+      api_key: ""
+      api_key_env: ZHIPU_API_KEY
+    - name: glm-4-flash
+      base_url: https://open.bigmodel.cn/api/paas/v4
+      model: glm-4-flash
+      api_key: ""
+      api_key_env: ZHIPU_API_KEY
+    - name: local-vllm-qwen
+      base_url: http://127.0.0.1:8000/v1
+      model: Qwen/Qwen2.5-7B-Instruct
+      api_key: ""
+      api_key_env: ""
 
 memory:
   db_path: data/memory/events.db
