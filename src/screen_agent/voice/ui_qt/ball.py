@@ -521,7 +521,7 @@ class QtFloatingBall:
         self._panel_anim.start()
 
     def _panel_anchor(self) -> tuple[int, int]:
-        """把浮条贴着球放：优先球左侧，空间不够换右侧；高度变化时保持锚定。"""
+        """面板在状态点左侧、底部与点对齐：输入框贴着点（点击后输入自然在手边）。"""
         ball, panel = self._ball, self._panel
         geo = ball.geometry()
         screen = ball.screen() or panel.screen()
@@ -530,9 +530,8 @@ class QtFloatingBall:
         x = geo.left() - panel.width() + 16
         if avail is not None and x < avail.left() + 8:
             x = geo.right() - 16
-        y = geo.top() - 6
+        y = geo.bottom() - panel.height() + 10
         if avail is not None:
-            y = min(y, avail.bottom() - panel.height() - 8)
             y = max(y, avail.top() + 8)
             x = min(max(x, avail.left() + 8), avail.right() - panel.width() - 8)
         return x, y
