@@ -67,7 +67,7 @@ class CommandExecutor:
         if isinstance(self.chat_client, DisabledChatClient):
             return ActionResult(
                 success=False,
-                message="对话未配置，请设置 chat.enabled 和 OPENAI_API_KEY",
+                message="对话未配置，请在 config.yaml 配置 chat.backends（本地 vLLM / DeepSeek）",
             )
 
         user_text = intent.raw_command.strip()

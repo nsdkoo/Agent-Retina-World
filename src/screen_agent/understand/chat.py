@@ -106,10 +106,75 @@ class DisabledChatClient:
         raise RuntimeError("Chat 未启用，请在 config.yaml 配置 chat 段并设置 API Key")
 
 
-def build_chat_client(chat_cfg: dict[str, Any]) -> OpenAICompatibleChatClient | DisabledChatClient:
+class MultiBackendChatClient:
+    """多后端 Chat 客户端：按配置顺序探测，前一个失败自动切下一个。
+
+    典型配置：本地 vLLM（千问系列）优先，云端 DeepSeek 兜底。
+    """
+
+    def __init__(self, backends: list[OpenAICompatibleChatClient]) -> None:
+        if not backends:
+            raise ValueError("MultiBackendChatClient 需要至少一个后端")
+        self.backends = backends
+
+    @property
+    def names(self) -> list[str]:
+        return [f"{b.base_url}:{b.model}" for b in self.backends]
+
+    def complete(self, messages: list[dict[str, str]], system: str | None = None) -> str:
+        last_error: Exception | None = None
+        for i, backend in enumerate(self.backends):
+            try:
+                return backend.complete(messages, system=system)
+            except Exception as exc:
+                last_error = exc
+                remaining = len(self.backends) - i - 1
+                if remaining:
+                    logger.warning(
+                        "Chat 后端 %s 失败，切换下一个（剩 %d 个）: %s",
+                        backend.base_url, remaining, exc,
+                    )
+                else:
+                    logger.warning("Chat 后端 %s 失败（已是最后一个）: %s", backend.base_url, exc)
+        if last_error:
+            raise last_error
+        raise RuntimeError("Chat 请求失败")
+
+
+def _build_backend(entry: dict[str, Any], default_max_tokens: int, default_timeout: float) -> OpenAICompatibleChatClient:
+    api_key = str(entry.get("api_key", "") or "").strip()
+    if not api_key:
+        env_name = entry.get("api_key_env") or ""
+        api_key = os.environ.get(env_name, "").strip() if env_name else ""
+    return OpenAICompatibleChatClient(
+        base_url=str(entry.get("base_url", "")),
+        model=str(entry.get("model", "")),
+        api_key=api_key,
+        fallback_model=str(entry.get("fallback_model", "") or ""),
+        max_tokens=int(entry.get("max_tokens", default_max_tokens)),
+        timeout=float(entry.get("timeout", default_timeout)),
+    )
+
+
+def build_chat_client(chat_cfg: dict[str, Any]) -> OpenAICompatibleChatClient | MultiBackendChatClient | DisabledChatClient:
     if not chat_cfg.get("enabled", False):
         return DisabledChatClient()
 
+    backends_cfg = chat_cfg.get("backends")
+    if isinstance(backends_cfg, list) and backends_cfg:
+        max_tokens = int(chat_cfg.get("max_tokens", 256))
+        timeout = float(chat_cfg.get("timeout", 60))
+        backends = [
+            _build_backend(entry, max_tokens, timeout)
+            for entry in backends_cfg
+            if isinstance(entry, dict) and entry.get("base_url") and entry.get("model")
+        ]
+        if not backends:
+            logger.warning("chat.backends 配置了但没有任何有效条目（缺 base_url/model）")
+            return DisabledChatClient()
+        return MultiBackendChatClient(backends)
+
+    # 旧版单后端配置兼容
     api_key = resolve_chat_api_key(
         chat_cfg.get("api_key"),
         chat_cfg.get("api_key_env", "OPENAI_API_KEY"),

@@ -57,3 +57,25 @@
 - 项目初始化：截图、pHash、VLM、Activity、SQLite、主动服务
 - CLI：`once` / `watch` / `report`
 - 架构文档与架构图
+## [0.7.0] - 2026-09-28
+
+### 新增
+
+- sherpa-onnx 流式 ASR（zipformer 双语 int8），边说边出字，endpoint 自动断句
+- KWS 关键词唤醒（wenetspeech zipformer），唤醒词 pypinyin 自动生成 keywords.txt
+- vits 中文女声 TTS（vits-zh-hf-fanchen-C），独立播报线程 + 播报期屏蔽麦克风防回环
+- AudioLoop 状态机（sounddevice 常驻流式采集）：KWS 待机 → 流式识别 → 线程池执行命令
+- 「唤醒词 + 命令」一句话直达（3 秒音频环形缓冲回放）
+- PyQt6 悬浮球：视网膜玻璃球 + 音量呼吸环 + 对话面板（气泡流/文字输入/屏幕活动卡片）+ 系统托盘 + 开机自启
+- Chat 多后端 `chat.backends`：本地 vLLM（千问系列）→ DeepSeek API 按序回退
+- 音频文件调试源 `voice.sherpa.audio_source`（无麦克风环境可验证全链路）
+- 测试：多后端回退 / keywords 生成 / 冒烟脚本 / E2E 音频链路脚本
+
+### 变更
+
+- `voice.ui` 默认 `qt`；`--ui ball` 保留 legacy Tkinter 球
+- Chat 后端失败自动切换；旧单后端配置兼容
+
+### 移除
+
+- Vosk / SpeechRecognition / pyttsx3 / Tkinter 侧边栏

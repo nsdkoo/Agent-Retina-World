@@ -1,95 +1,79 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from typing import Callable
-
-from screen_agent.voice.offline_stt import STTEngine
 
 logger = logging.getLogger(__name__)
 
 
-class SpeechListener:
-    """麦克风语音听写，支持在线 Google / 离线 Vosk。"""
+class Speaker:
+    """语音播报（独立线程 + 队列，不阻塞主循环）。
+
+    engine="sherpa" 用 vits 离线中文音色；否则回退 pyttsx3。
+    on_play_start / on_play_end 用于通知音频循环屏蔽麦克风，防自听回环。
+    """
 
     def __init__(
         self,
-        engine: STTEngine,
-        timeout: float = 8.0,
-        phrase_limit: float = 12.0,
-        energy_threshold: int = 300,
-        sample_rate: int = 16000,
+        enabled: bool = True,
+        engine: str = "pyttsx3",
+        tts_model_dir=None,
+        on_play_start: Callable[[], None] | None = None,
+        on_play_end: Callable[[], None] | None = None,
     ) -> None:
-        self.engine = engine
-        self.timeout = timeout
-        self.phrase_limit = phrase_limit
-        self.energy_threshold = energy_threshold
-        self.sample_rate = sample_rate
-        self._recognizer = None
-        self._microphone = None
-
-    def _ensure_mic(self) -> None:
-        if self._recognizer is not None:
-            return
-        import speech_recognition as sr
-
-        self._recognizer = sr.Recognizer()
-        self._recognizer.energy_threshold = self.energy_threshold
-        self._recognizer.dynamic_energy_threshold = True
-        self._microphone = sr.Microphone(sample_rate=self.sample_rate)
-
-    def listen_once(self, on_listening: Callable[[], None] | None = None) -> str | None:
-        self._ensure_mic()
-        import speech_recognition as sr
-
-        assert self._recognizer is not None
-        assert self._microphone is not None
-
-        try:
-            with self._microphone as source:
-                self._recognizer.adjust_for_ambient_noise(source, duration=0.35)
-                if on_listening:
-                    on_listening()
-                audio = self._recognizer.listen(
-                    source,
-                    timeout=self.timeout,
-                    phrase_time_limit=self.phrase_limit,
-                )
-            return self.engine.transcribe(audio, self.sample_rate)
-        except sr.WaitTimeoutError:
-            return None
-        except Exception as exc:
-            logger.warning("语音识别失败: %s", exc)
-            return None
-
-
-class Speaker:
-    """语音播报反馈（可选）。"""
-
-    def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
-        self._engine = None
-
-    def _ensure_engine(self) -> None:
-        if not self.enabled or self._engine is not None:
-            return
-        try:
-            import pyttsx3
-
-            self._engine = pyttsx3.init()
-            self._engine.setProperty("rate", 180)
-        except Exception as exc:
-            logger.warning("TTS 不可用: %s", exc)
-            self.enabled = False
+        self.engine_name = engine
+        self.tts_model_dir = tts_model_dir
+        self.on_play_start = on_play_start
+        self.on_play_end = on_play_end
+        self._queue: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(target=self._worker, daemon=True)
+        self._thread.start()
+        self._tts = None
+        self._pyttsx = None
 
     def say(self, text: str) -> None:
         if not self.enabled or not text:
             return
-        self._ensure_engine()
-        if self._engine is None:
+        self._queue.put(text[:200])
+
+    def stop(self) -> None:
+        self._queue.put(None)
+
+    def _worker(self) -> None:
+        while True:
+            text = self._queue.get()
+            if text is None:
+                break
+            try:
+                if self.on_play_start:
+                    self.on_play_start()
+                self._play(text)
+            except Exception as exc:
+                logger.warning("播报失败: %s", exc)
+            finally:
+                if self.on_play_end:
+                    self.on_play_end()
+
+    def _play(self, text: str) -> None:
+        if self.engine_name == "sherpa" and self.tts_model_dir:
+            if self._tts is None:
+                from screen_agent.voice.sherpa_engine import SherpaTts
+
+                self._tts = SherpaTts(self.tts_model_dir)
+            samples, sample_rate = self._tts.synthesize(text)
+            import sounddevice as sd
+
+            sd.play(samples, sample_rate)
+            sd.wait()
             return
-        try:
-            spoken = text[:200]
-            self._engine.say(spoken)
-            self._engine.runAndWait()
-        except Exception as exc:
-            logger.warning("播报失败: %s", exc)
+
+        if self._pyttsx is None:
+            import pyttsx3
+
+            self._pyttsx = pyttsx3.init()
+            self._pyttsx.setProperty("rate", 180)
+        self._pyttsx.say(text)
+        self._pyttsx.runAndWait()

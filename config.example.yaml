@@ -28,16 +28,25 @@ vlm:
   timeout: 120
   fallback_heuristic: true
 
+# 对话模型：多后端按序探测，前一个失败自动切下一个
+# 本地 = vLLM 部署千问系列（企业标准 serving）：vllm serve Qwen/Qwen2.5-7B-Instruct --port 8000
+# 云端 = DeepSeek API（需设置环境变量 DEEPSEEK_API_KEY）
 chat:
   enabled: true
-  base_url: https://api.codexzh.com/v1
-  model: gpt-5.4-mini
-  fallback_model: gpt-5.4
-  api_key: ""
-  api_key_env: OPENAI_API_KEY
   max_tokens: 256
   max_history: 6
   timeout: 60
+  backends:
+    - name: local-vllm-qwen
+      base_url: http://127.0.0.1:8000/v1
+      model: Qwen/Qwen2.5-7B-Instruct   # 千问系列，可按机器配置换其他 Qwen 规格
+      api_key: ""
+      api_key_env: ""
+    - name: deepseek
+      base_url: https://api.deepseek.com
+      model: deepseek-chat
+      api_key: ""
+      api_key_env: DEEPSEEK_API_KEY
 
 memory:
   db_path: data/memory/events.db
@@ -52,15 +61,9 @@ web:
 voice:
   wake_names: ["Retina", "小光", "光光"]
   speak_feedback: true
-  language: zh-CN
-  stt_engine: auto              # auto | vosk(离线) | google(在线)
-  vosk_model_path: models/vosk-model-small-cn-0.22
   session_mode: true             # 唤醒后免唤醒连续对话
   session_duration_seconds: 60
-  ui: ball                       # ball | sidebar | none
-  listen_timeout: 8
-  phrase_limit: 12
-  energy_threshold: 300
+  ui: qt                         # qt（新悬浮球）| ball（legacy）| none
   apps:
     微信: WeChat
     浏览器: msedge
@@ -73,3 +76,15 @@ voice:
     谷歌: https://www.google.com
     GitHub: https://github.com
     知乎: https://www.zhihu.com
+  sherpa:
+    models_dir: models
+    asr_model_dir: sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+    kws_model_dir: sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01
+    tts_model_dir: vits-zh-hf-fanchen-C
+    tts_engine: sherpa            # sherpa（vits 女声）| pyttsx3（机器音兜底）
+    kws_threshold: 0.4            # 0.35-0.5 逐词调；误触发高就调大
+    keywords: ["小光", "光光"]     # KWS 唤醒词（中文）；Retina 等英文词靠 idle_asr 转写兜底
+    num_threads: 1
+    mic_device: null              # 声卡设备序号，null=系统默认；启动日志会枚举所有输入设备
+    idle_asr: false               # true = 待机时双开 ASR 转写（支持英文唤醒词，CPU 占用更高）
+    audio_source: null            # 调试用：wav 文件路径代替麦克风（如 data/test_wake_xiaoguang.wav）

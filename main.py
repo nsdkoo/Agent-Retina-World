@@ -85,7 +85,12 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 def cmd_demo(args: argparse.Namespace) -> None:
     from screen_agent.config import load_yaml
-    from screen_agent.understand.chat import build_chat_client, resolve_chat_api_key
+    from screen_agent.understand.chat import (
+        DisabledChatClient,
+        MultiBackendChatClient,
+        build_chat_client,
+        resolve_chat_api_key,
+    )
 
     raw = load_yaml(args.config)
     chat_cfg = raw.get("chat", {})
@@ -94,22 +99,26 @@ def cmd_demo(args: argparse.Namespace) -> None:
     print(f"Agent-Retina-World v{__version__} · 最小 Demo 检查")
     print(f"  唤醒词: {', '.join(voice_cfg.get('wake_names', ['小光']))}")
     print(f"  Chat 启用: {chat_cfg.get('enabled', False)}")
-    print(f"  模型: {chat_cfg.get('model', 'gpt-5.4-mini')} (回退 {chat_cfg.get('fallback_model', 'gpt-5.4')})")
-    print(f"  API: {chat_cfg.get('base_url', 'https://api.codexzh.com/v1')}")
+    backends = chat_cfg.get("backends")
+    if isinstance(backends, list) and backends:
+        for b in backends:
+            print(f"  Chat 后端: {b.get('name', '?')} → {b.get('base_url')} ({b.get('model')})")
+    else:
+        print(f"  Chat 模型: {chat_cfg.get('model', 'gpt-5.4-mini')} (回退 {chat_cfg.get('fallback_model', 'gpt-5.4')})")
+        print(f"  API: {chat_cfg.get('base_url', 'https://api.codexzh.com/v1')}")
 
     key = resolve_chat_api_key(chat_cfg.get("api_key"), chat_cfg.get("api_key_env", "OPENAI_API_KEY"))
     if key:
         print(f"  API Key: 已找到 ({key[:8]}…)")
     else:
-        print("  API Key: 未找到 — 请设置 OPENAI_API_KEY 或 ~/.codex/auth.json")
+        print("  API Key: 未找到 — 请设置 DEEPSEEK_API_KEY / OPENAI_API_KEY 或 ~/.codex/auth.json")
 
     client = build_chat_client(chat_cfg)
-    from screen_agent.understand.chat import DisabledChatClient
-
     if isinstance(client, DisabledChatClient):
         print("  Chat 客户端: 未就绪")
     else:
-        print("  Chat 客户端: 就绪")
+        names = client.names if isinstance(client, MultiBackendChatClient) else [client.base_url]
+        print(f"  Chat 客户端: 就绪（{len(names)} 个后端: {' → '.join(names)}）")
 
     print("\n启动悬浮球语音助手… 说「小光，你好」试试")
     cmd_voice(args)
@@ -118,29 +127,41 @@ def cmd_demo(args: argparse.Namespace) -> None:
 def cmd_voice(args: argparse.Namespace) -> None:
     from screen_agent.config import load_yaml
     from screen_agent.voice.assistant import VoiceAssistant
-    from screen_agent.voice.floating_ball import FloatingBallUI
-    from screen_agent.voice.offline_stt import download_vosk_model
-    from screen_agent.voice.sidebar import VoiceSidebar
+    from screen_agent.voice.model_download import ensure_sherpa_models
 
     if args.download_model:
-        raw = load_yaml(args.config)
-        model_rel = raw.get("voice", {}).get("vosk_model_path", "models/vosk-model-small-cn-0.22")
-        download_vosk_model(ROOT / Path(model_rel).parent)
+        ensure_sherpa_models(ROOT / "models")
+        print("全部模型就绪")
         return
 
-    assistant = VoiceAssistant(args.config, project_root=ROOT)
+    try:
+        assistant = VoiceAssistant(args.config, project_root=ROOT)
+    except FileNotFoundError as exc:
+        print(f"语音模型未就绪：{exc}")
+        print("先运行: python main.py voice --download-model")
+        return
     ui_mode = args.ui
     if not ui_mode:
         raw = load_yaml(args.config)
-        ui_mode = raw.get("voice", {}).get("ui", "ball")
+        ui_mode = raw.get("voice", {}).get("ui", "qt")
 
     if args.no_ui or ui_mode == "none":
+        from screen_agent.voice.audio_loop import list_microphones
+
         print(f"Agent-Retina-World v{__version__} · 语音常驻（无界面）")
         print(f"唤醒词：{', '.join(assistant.wake_names)}")
+        print(f"输入设备：{list_microphones()}")
         assistant.run_forever()
-    elif ui_mode == "sidebar":
-        VoiceSidebar(assistant).run()
+    elif ui_mode == "qt":
+        from screen_agent.voice.ui_qt.ball import QtFloatingBall
+
+        QtFloatingBall(assistant).run()
     else:
+        try:
+            from screen_agent.voice.floating_ball import FloatingBallUI
+        except ImportError as exc:
+            print(f"legacy 悬浮球需要 tkinter（{exc}），请改用 --ui qt")
+            return
         FloatingBallUI(assistant).run()
 
 
@@ -172,13 +193,13 @@ def main() -> None:
 
     p_voice = sub.add_parser("voice", help="启动语音常驻助手（呼唤名字即可操作）")
     p_voice.add_argument("--no-ui", action="store_true", help="无界面，纯后台监听")
-    p_voice.add_argument("--ui", choices=["ball", "sidebar", "none"], default=None, help="UI 模式，默认悬浮球")
-    p_voice.add_argument("--download-model", action="store_true", help="下载 Vosk 离线中文语音模型")
+    p_voice.add_argument("--ui", choices=["qt", "ball", "none"], default=None, help="UI 模式，默认 Qt 悬浮球")
+    p_voice.add_argument("--download-model", action="store_true", help="下载 sherpa 离线语音模型（ASR/KWS/TTS）")
     p_voice.set_defaults(func=cmd_voice)
 
     p_demo = sub.add_parser("demo", help="最小 Demo：检查配置并启动悬浮球语音助手")
     p_demo.add_argument("--no-ui", action="store_true", help="无界面，纯后台监听")
-    p_demo.add_argument("--ui", choices=["ball", "sidebar", "none"], default=None, help="UI 模式，默认悬浮球")
+    p_demo.add_argument("--ui", choices=["qt", "ball", "none"], default=None, help="UI 模式，默认 Qt 悬浮球")
     p_demo.set_defaults(func=cmd_demo)
 
     args = parser.parse_args()

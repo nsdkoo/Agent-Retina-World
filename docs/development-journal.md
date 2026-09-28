@@ -257,3 +257,39 @@ a0dd36b 2026-06-18  feat: 初始化 Agent-Retina-World 桌面屏幕感知 Agent 
 ---
 
 *最后更新：2026-06-25 · 全版本 Plan/过程文档归档完成*
+
+---
+
+## v0.7 · 流式语音 + Qt 悬浮球 + 多后端对话（2026-09-28）
+
+### 动机
+
+用户反馈 v0.6 两个痛点：悬浮球 UI 太丑（52px Tkinter 原型）、语音不好用（整段听写 + 噪声校准延迟 + Vosk 小模型识别率低）。目标定为「常驻桌面、说话就能听懂」。
+
+### 技术决策
+
+- **sherpa-onnx 统一语音栈**：流式 zipformer 双语 ASR（int8）+ wenetspeech KWS 唤醒 + vits 中文 TTS，全部离线、纯 CPU。替代 Vosk（整段识别）+ SpeechRecognition/Google（在线兜底）+ pyttsx3（机器音）。
+- **KWS/ASR 不并行**：待机只喂 KWS（CPU <3%），命中后同一音频流转 VAD 式 endpoint 断句 + 流式 ASR。
+- **一句话直达**：3 秒音频环形缓冲，唤醒命中后回放，「小光，截图」一句话完成唤醒 + 命令。
+- **防自听回环**：TTS 播报期置 muted 标志，采集回调丢帧 + 清队列。
+- **keywords.txt 程序生成**：pypinyin 声母+带调韵母拆 token（`x iǎo g uāng @小光`），token 逐一校验 tokens.txt，杜绝静默失灵。
+- **Windows 坑**：kaldifst 读不了非 ASCII 路径（D:\素材存储），TTS 模型目录用 junction 映射到 %TEMP% 绕过；sounddevice PortAudio 构建输入设备只在 WDM-KS 暴露且无法打开，改为试开验证 + 明确报错。
+- **Chat 多后端**：`chat.backends` 按序探测（本地 vLLM 千问优先、DeepSeek API 兜底），复用 OpenAI 兼容协议零架构改动。
+
+### 交付
+
+- `voice/sherpa_engine.py`（ASR/KWS/TTS 封装 + keywords 生成）
+- `voice/model_download.py`（ghfast 镜像下载器）
+- `voice/audio_loop.py`（状态机主循环 + 文件调试源）
+- `voice/ui_qt/`（signals/ball/panel/tray，视网膜玻璃球 + 音量呼吸环）
+- 测试 22 个全绿；`scripts/smoke_sherpa.py` 引擎冒烟；`scripts/e2e_audio_loop.py` TTS→KWS→ASR 全链路验证
+- 移除 Vosk/SpeechRecognition/pyttsx3/Tkinter 侧边栏
+
+### 已知限制
+
+- 本开发机麦克风端点为「已拔出」状态（无物理麦克风），真机语音待插麦验证；音频链路已用文件源 E2E 验证
+- 英文唤醒词（Retina）依赖 `idle_asr: true` 双开 ASR 转写，默认关闭
+
+---
+
+*最后更新：2026-09-28 · v0.7*

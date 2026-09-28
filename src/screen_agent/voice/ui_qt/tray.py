@@ -1,0 +1,110 @@
+"""系统托盘：显示/隐藏悬浮球、开机自启、退出。"""
+
+from __future__ import annotations
+
+import logging
+import sys
+from pathlib import Path
+
+from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
+
+logger = logging.getLogger(__name__)
+
+AUTOSTART_NAME = "AgentRetinaVoice"
+
+
+def _make_icon() -> QIcon:
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor("#3b82f6"))
+    painter.setPen(QColor("#1d4ed8"))
+    painter.drawEllipse(6, 6, 52, 52)
+    painter.setPen(QColor("white"))
+    font = painter.font()
+    font.setBold(True)
+    font.setPixelSize(22)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), 0x0084, "AR")  # AlignCenter
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _autostart_command() -> str:
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    exe = pythonw if pythonw.exists() else Path(sys.executable)
+    main_py = Path(__file__).resolve().parents[4] / "main.py"
+    return f'"{exe}" "{main_py}" voice'
+
+
+def is_autostart_enabled() -> bool:
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+        ) as key:
+            winreg.QueryValueEx(key, AUTOSTART_NAME)
+            return True
+    except OSError:
+        return False
+
+
+def set_autostart(enabled: bool) -> bool:
+    try:
+        import winreg
+
+        path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        if enabled:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, _autostart_command())
+        else:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.DeleteValue(key, AUTOSTART_NAME)
+            except FileNotFoundError:
+                pass
+        return True
+    except OSError as exc:
+        logger.warning("设置开机自启失败: %s", exc)
+        return False
+
+
+class TrayIcon(QSystemTrayIcon):
+    def __init__(self, ball_widget, on_exit, on_toggle_panel=None) -> None:
+        super().__init__(_make_icon())
+        self._ball = ball_widget
+        menu = QMenu()
+
+        act_toggle = QAction("显示/隐藏悬浮球", menu)
+        act_toggle.triggered.connect(lambda: ball_widget.setVisible(not ball_widget.isVisible()))
+        menu.addAction(act_toggle)
+
+        if on_toggle_panel is not None:
+            act_panel = QAction("显示对话面板", menu)
+            act_panel.triggered.connect(on_toggle_panel)
+            menu.addAction(act_panel)
+
+        menu.addSeparator()
+
+        self._autostart_action = QAction("开机自启", menu)
+        self._autostart_action.setCheckable(True)
+        self._autostart_action.setChecked(is_autostart_enabled())
+        self._autostart_action.toggled.connect(set_autostart)
+        menu.addAction(self._autostart_action)
+
+        menu.addSeparator()
+        act_exit = QAction("退出", menu)
+        act_exit.triggered.connect(on_exit)
+        menu.addAction(act_exit)
+
+        self.setContextMenu(menu)
+        self.setToolTip("Agent-Retina 语音助手 · 喊「小光」唤醒")
+        self.activated.connect(self._on_activated)
+
+    def _on_activated(self, reason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._ball.setVisible(not self._ball.isVisible())

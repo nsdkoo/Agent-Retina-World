@@ -2,7 +2,7 @@
 
 **桌面屏幕世界感知 Agent** — 让 AI 理解你在电脑上做了什么，并主动提供服务。
 
-> 个人原创项目 · v0.6
+> 个人原创项目 · v0.7
 
 ![系统架构](docs/images/architecture.png)
 
@@ -16,6 +16,22 @@
 | [架构设计](docs/architecture.md) | 系统设计 |
 | [语音助手](docs/voice-assistant.md) | 唤醒、会话、指令 |
 | [Demo 试跑](docs/demo-quickstart.md) | 5 步本地验证 |
+
+## v0.7 更新 · 流式语音 + Qt 悬浮球 + 多后端对话
+
+```powershell
+python main.py voice --download-model   # 下载 sherpa 模型套件（ASR/KWS/TTS，约 450MB）
+python main.py voice                    # Qt 悬浮球（默认）
+```
+
+- **流式离线语音**：sherpa-onnx zipformer 双语模型，边说边识别（10s 音频 0.6s 出稿），彻底替换 Vosk 整段听写
+- **真·关键词唤醒**：sherpa KWS 模型 spotting「小光/光光」，唤醒词由 pypinyin 自动生成（`x iǎo g uāng @小光`），待机 CPU <5%
+- **自然音色 TTS**：vits 中文女声替换 pyttsx3 机器音，播报在独立线程且自动屏蔽麦克风防回环
+- **音量呼吸环**：悬浮球光环随说话音量实时起伏
+- **PyQt6 悬浮球**：视网膜主题玻璃球 + 对话面板（气泡流 / 文字输入 / 屏幕活动卡片）+ 系统托盘 + 开机自启
+- **打字 + 语音双输入**：面板打字与语音共用 `handle_command`，意图/对话历史/播报全共享
+- **对话多后端**：`chat.backends` 按序探测——本地 vLLM（千问系列）优先，DeepSeek API 兜底，旧单后端配置兼容
+- **「小光，截图」一句话直达**：唤醒词命中后回放 3 秒音频缓冲，唤醒词和命令一句话说完
 
 ## v0.6 更新 · LLM 对话 Demo
 
@@ -136,7 +152,7 @@ sequenceDiagram
 | 截图采集 | `capture/screen.py` | 多显示器截图，按时间戳归档 |
 | 去重 | `dedup/hasher.py` | L1 pHash + L2 直方图相似度 |
 | 页面理解 | `understand/vlm.py` | 启发式 / OpenAI 兼容 VLM |
-| LLM 对话 | `understand/chat.py` | OpenAI 兼容 Chat（codexzh） |
+| LLM 对话 | `understand/chat.py` | OpenAI 兼容 Chat 多后端（vLLM 千问 / DeepSeek） |
 | 前台上下文 | `capture/context.py` | Windows 活动窗口标题与进程 |
 | 活动聚合 | `activity/store.py` | 时间序列事件构建与 SQLite 存储 |
 | 主动服务 | `proactive/service.py` | 日报、待办、时间分布 |
@@ -203,7 +219,8 @@ embedding:
 - [x] VLM 真实推理（OpenAI 兼容）
 - [x] Web 时间线 UI
 - [x] 语音唤醒常驻助手（呼唤名字操作）
-- [x] LLM 自由对话（codexzh gpt-5.4-mini）
+- [x] LLM 自由对话（多后端：本地 vLLM 千问 / DeepSeek API）
+- [x] v0.7 流式离线语音 + KWS 唤醒 + vits TTS + Qt 悬浮球
 - [ ] 跨会话任务归并与证据追溯
 
 ## License
