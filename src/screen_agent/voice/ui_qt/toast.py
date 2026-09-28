@@ -24,25 +24,25 @@ FADE_MS = 160
 THEMES = {
     "light": {
         "bg": QColor(255, 255, 255, 246),
-        "border": QColor(190, 202, 218, 190),
+        "border": QColor(228, 233, 241, 220),
         "text": QColor("#1b2330"),
         "bot_bg": QColor(246, 249, 253, 248),
         "user_bg": QColor(37, 99, 235, 240),
         "user_text": QColor("#ffffff"),
         "info_bg": QColor(231, 247, 239, 246),
         "info_text": QColor("#0f6b4b"),
-        "shadow": 16,
+        "shadow": 7,
     },
     "dark": {
         "bg": QColor(24, 30, 40, 240),
-        "border": QColor(90, 104, 126, 170),
+        "border": QColor(63, 75, 96, 200),
         "text": QColor("#f3f7fc"),
         "bot_bg": QColor(30, 37, 48, 242),
         "user_bg": QColor(59, 130, 246, 235),
         "user_text": QColor("#ffffff"),
         "info_bg": QColor(20, 50, 40, 240),
         "info_text": QColor("#8ce9b6"),
-        "shadow": 28,
+        "shadow": 12,
     },
 }
 
@@ -208,16 +208,12 @@ class BubbleToast(QWidget):
         painter.setBrush(fill)
         painter.drawPath(path)
 
-        # 顶部流光细线（品牌点睛，保持和面板一致）
+        # 顶部发丝线（与面板一致的中性分隔）
         painter.setPen(Qt.PenStyle.NoPen)
-        grad_rect = QRectF(body_rect.left() + RADIUS * 0.6, body_rect.top() + 1, body_rect.width() - RADIUS * 1.2, 1.6)
-        from PyQt6.QtGui import QLinearGradient
-
-        lg = QLinearGradient(grad_rect.topLeft(), grad_rect.topRight())
-        for pos, hex_color in ((0.0, "#0894FF"), (0.35, "#C959DD"), (0.7, "#FF2E54"), (1.0, "#FF9004")):
-            lg.setColorAt(pos, QColor(hex_color))
-        painter.setBrush(lg)
-        painter.drawRect(grad_rect)
+        line_color = THEMES.get(self._theme, THEMES["light"])["border"]
+        line_rect = QRectF(body_rect.left() + 12, body_rect.top() + 1.2, body_rect.width() - 24, 1.0)
+        painter.setBrush(line_color)
+        painter.drawRect(line_rect)
 
         # 文本
         from PyQt6.QtGui import QFont

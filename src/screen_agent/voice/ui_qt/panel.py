@@ -50,15 +50,15 @@ THEMES = {
         "bubble_info_text": "#8ce9b6",
         "user_bg": "#2b3442",
         "user_text": "#f2f7ff",
-        "marker": "#C084FC",
+        "marker": "#9aa4b6",
         "btn_hover_bg": "#333d4d",
-        "shadow_alpha": 26,
+        "shadow_alpha": 10,
     },
     "light": {
         "panel_top": "#ffffff",
-        "panel_bottom": "#f6f8fc",
-        "panel_border": "#dde4ef",
-        "panel_border_focus": "#9db4d6",
+        "panel_bottom": "#fbfcfe",
+        "panel_border": "#e4e9f1",
+        "panel_border_focus": "#b9c7dc",
         "text": "#1b2330",
         "sub": "#5c6a7d",
         "muted": "#8d99ab",
@@ -71,16 +71,11 @@ THEMES = {
         "bubble_info_text": "#116b4b",
         "user_bg": "#e6ecf6",
         "user_text": "#1b2330",
-        "marker": "#C959DD",
+        "marker": "#a5aebc",
         "btn_hover_bg": "#eef2f9",
-        "shadow_alpha": 18,
+        "shadow_alpha": 7,
     },
 }
-
-AURORA_STRIP = (
-    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-    " stop:0 #0894FF, stop:0.35 #C959DD, stop:0.7 #FF2E54, stop:1 #FF9004);"
-)
 
 DOT_COLORS = {
     "idle": "#8b95a8",
@@ -106,27 +101,24 @@ def build_style(theme: str) -> str:
     selection-background-color: #3b82f6; selection-color: #ffffff;
 }}
 #SendBtn {{
-    color: #ffffff;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #7c3aed);
-    border: none; border-radius: 14px; font-size: 13px;
-    min-width: 46px; max-width: 46px; min-height: 27px; max-height: 27px;
+    color: #ffffff; background: #1d6fe0;
+    border: none; border-radius: 14px; font-size: 12px;
+    min-width: 44px; max-width: 44px; min-height: 26px; max-height: 26px;
 }}
-#SendBtn:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3b82f6, stop:1 #8b5cf6);
-}}
+#SendBtn:hover {{ background: #2f7df0; }}
 #CloseBtn {{
     color: {t['muted']}; background: transparent; border: none;
     font-size: 12px; max-width: 20px; max-height: 20px;
 }}
 #CloseBtn:hover {{ color: {t['text']}; }}
 #ClearBtn {{ color: {t['muted']}; background: transparent; border: none; font-size: 11px; }}
-#ClearBtn:hover {{ color: #7c3aed; }}
+#ClearBtn:hover {{ color: #1d6fe0; }}
 #ModelBtn {{
     color: {t['sub']}; background: transparent; border: none;
     font-size: 11px; padding: 2px 6px; border-radius: 6px;
 }}
 #ModelBtn:hover {{ color: {t['text']}; background: {t['btn_hover_bg']}; }}
-#Strip {{ border-radius: 1px; {AURORA_STRIP} max-height: 2px; }}
+#Strip {{ background: {t['panel_border']}; border-radius: 1px; max-height: 1px; }}
 #ReplyCard {{ background: transparent; border: none; }}
 #ReplyDivider {{ background: {t['reply_border']}; max-height: 1px; }}
 #ReplyCard QScrollBar:vertical {{ background: transparent; width: 6px; margin: 2px 0; }}
@@ -417,13 +409,13 @@ class ChatPanel(QWidget):
             SHADOW_MARGIN, SHADOW_MARGIN, -SHADOW_MARGIN, -(SHADOW_MARGIN + 2)
         )
         base_alpha = THEMES.get(self._theme, THEMES["light"])["shadow_alpha"]
-        for i in range(6):
-            spread = 6 - i
+        for i in range(3):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0, 0, 0, int(base_alpha * (0.35 + i * 0.12))))
+            painter.setBrush(QColor(15, 25, 45, int(base_alpha * (0.4 + i * 0.25))))
+            spread = 3 - i
             path = QPainterPath()
             path.addRoundedRect(
-                float(card.left() - spread), float(card.top() - spread + 3),
+                float(card.left() - spread), float(card.top() - spread + 1.5),
                 float(card.width() + spread * 2), float(card.height() + spread * 2),
                 16 + spread, 16 + spread,
             )
