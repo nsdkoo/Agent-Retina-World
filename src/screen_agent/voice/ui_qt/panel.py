@@ -112,6 +112,15 @@ class ChatPanel(QWidget):
         header.addWidget(self._status_label)
         root.addLayout(header)
 
+        divider = QLabel()
+        divider.setFixedHeight(2)
+        divider.setStyleSheet(
+            "border-radius: 1px;"
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 #0894FF, stop:0.35 #C959DD, stop:0.7 #FF2E54, stop:1 #FF9004);"
+        )
+        root.addWidget(divider)
+
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)

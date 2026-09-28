@@ -43,11 +43,6 @@ chat:
       model: deepseek-flash              # DeepSeek-V4.1-Flash
       api_key: ""
       api_key_env: DEEPSEEK_API_KEY
-    - name: glm-4.7-flash
-      base_url: https://open.bigmodel.cn/api/paas/v4
-      model: glm-4.7-flash
-      api_key: ""
-      api_key_env: ZHIPU_API_KEY
     - name: glm-4-flash
       base_url: https://open.bigmodel.cn/api/paas/v4
       model: glm-4-flash
