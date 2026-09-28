@@ -24,11 +24,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-PANEL_W = 420              # 窗口宽（含投影边距）
-SHADOW_MARGIN = 14
-INPUT_MIN_H = 44
-INPUT_MAX_H = 132          # 约 6 行
-REPLY_MAX_H = 260          # 回复卡限高，超出内部滚动
+PANEL_W = 356              # 窗口宽（含投影边距）
+SHADOW_MARGIN = 10
+INPUT_MIN_H = 40
+INPUT_MAX_H = 112          # 约 5 行
+REPLY_MAX_H = 196          # 回复卡限高，超出内部滚动
 LONG_TEXT_THRESHOLD = 400  # 超过这么多字折叠成 chip
 CHIP_TEMPLATE = "[已粘贴长文 {n} 字 · 回车发送]"
 
@@ -96,14 +96,14 @@ def build_style(theme: str) -> str:
 }}
 #InputBox {{
     background: transparent; color: {t['text']};
-    border: none; padding: 10px 4px 10px 12px; font-size: 14px;
+    border: none; padding: 9px 4px 9px 11px; font-size: 13px;
     selection-background-color: #3b82f6; selection-color: #ffffff;
 }}
 #SendBtn {{
     color: #ffffff;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #7c3aed);
     border: none; border-radius: 14px; font-size: 13px;
-    min-width: 54px; max-width: 54px; min-height: 30px; max-height: 30px;
+    min-width: 46px; max-width: 46px; min-height: 27px; max-height: 27px;
 }}
 #SendBtn:hover {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3b82f6, stop:1 #8b5cf6);
@@ -130,20 +130,20 @@ def build_bubble_style(kind: str, theme: str) -> str:
     t = THEMES.get(theme, THEMES["light"])
     if kind == "User":
         return (
-            "QLabel { color: #ffffff; font-size: 13px; padding: 8px 11px;"
+            "QLabel { color: #ffffff; font-size: 12px; padding: 7px 10px;"
             " background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #4f46e5);"
-            " border-radius: 11px; border-bottom-right-radius: 4px; margin-left: 56px; }"
+            " border-radius: 11px; border-bottom-right-radius: 4px; margin-left: 40px; }"
         )
     if kind == "Info":
         return (
-            f"QLabel {{ color: {t['bubble_info_text']}; font-size: 12px; padding: 8px 11px;"
+            f"QLabel {{ color: {t['bubble_info_text']}; font-size: 11px; padding: 6px 9px;"
             f" background: {t['bubble_info_bg']}; border: 1px solid {t['bubble_info_border']};"
             " border-radius: 9px; margin: 0 30px; }"
         )
     return (
-        f"QLabel {{ color: {t['text']}; font-size: 13px; padding: 8px 11px;"
+        f"QLabel {{ color: {t['text']}; font-size: 12px; padding: 7px 10px;"
         f" background: {t['bubble_bot_bg']}; border: 1px solid {t['bubble_bot_border']};"
-        " border-radius: 11px; border-bottom-left-radius: 4px; margin-right: 56px; }"
+        " border-radius: 11px; border-bottom-left-radius: 4px; margin-right: 40px; }"
     )
 
 
@@ -233,7 +233,7 @@ def _bubble(text: str, kind: str, theme: str) -> QLabel:
     label.setWordWrap(True)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
-    label.setMaximumWidth(PANEL_W - 120)
+    label.setMaximumWidth(PANEL_W - 96)
     label.ensurePolished()
     return label
 
@@ -337,7 +337,7 @@ class ChatPanel(QWidget):
         self._chat_flow = QVBoxLayout(inner)
         self._chat_flow.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._chat_flow.setSpacing(6)
-        self._chat_flow.setContentsMargins(8, 8, 8, 8)
+        self._chat_flow.setContentsMargins(7, 7, 7, 7)
         self._scroll.setWidget(inner)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setFixedHeight(0)

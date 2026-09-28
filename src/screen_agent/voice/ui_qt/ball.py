@@ -28,11 +28,12 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QWidget
 
 from screen_agent.voice.ui_qt.signals import AssistantSignals
+from screen_agent.voice.ui_qt.toast import BubbleToast
 
 logger = logging.getLogger(__name__)
 
-BALL_SIZE = 32
-DOT_RADIUS = 11.0
+BALL_SIZE = 44
+DOT_RADIUS = 16.0
 
 # Apple Intelligence 流光配色（固定顺序，勿打乱）
 AURORA = ["#0894FF", "#C959DD", "#FF2E54", "#FF9004"]
@@ -91,6 +92,7 @@ class BallWidget(QWidget):
         self._drag_offset = None
         self._press_pos = None
         self._moved = False
+        self.on_moved = None  # 外部注入：拖动时同步气泡位置
 
         screen = self.screen()
         if screen is not None:
@@ -138,28 +140,41 @@ class BallWidget(QWidget):
         now = time.monotonic()
 
         cx = cy = BALL_SIZE / 2
-        radius = DOT_RADIUS + hover * 0.6
-        # 安静：静止时半透明，悬停/活动时提亮
-        base_alpha = 0.45 + hover * 0.45 + (0.3 if active else 0.0)
+        radius = DOT_RADIUS + hover * 0.8
+        # 安静：静止时半透明，悬停/活动时提亮（始终保留通透感）
+        base_alpha = 0.52 + hover * 0.34 + (0.24 if active else 0.0)
 
-        # 1. 本体：通透小圆 + 极细描边（无高光弧、无乳白球）
-        grad = QRadialGradient(cx - radius * 0.3, cy - radius * 0.4, radius * 1.8)
-        grad.setColorAt(0.0, QColor(255, 255, 255, int(210 * min(1.0, base_alpha))))
+        # 0. 柔和投影（让玻璃点浮起来，但不重）
+        for i in range(4):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(20, 30, 48, int((7 + i * 4) * min(1.0, base_alpha))))
+            spread = 4 - i
+            painter.drawEllipse(QPointF(cx, cy + 2.0), radius + spread, radius + spread)
+
+        # 1. 本体：通透磨砂圆（细腻三层，无亮面高光球）
+        grad = QRadialGradient(cx - radius * 0.35, cy - radius * 0.45, radius * 2.0)
+        grad.setColorAt(0.0, QColor(255, 255, 255, int(238 * min(1.0, base_alpha))))
         if active:
             tint = QColor(accent)
-            tint.setAlpha(int(70 * min(1.0, base_alpha)))
-            grad.setColorAt(0.55, tint)
+            tint.setAlpha(int(58 * min(1.0, base_alpha)))
+            grad.setColorAt(0.5, tint)
+            grad.setColorAt(0.85, QColor(accent.red() // 3 + 150, accent.green() // 3 + 160, accent.blue() // 3 + 170, int(190 * min(1.0, base_alpha))))
         else:
-            grad.setColorAt(0.55, QColor(226, 232, 242, int(170 * min(1.0, base_alpha))))
-        grad.setColorAt(1.0, QColor(150, 165, 188, int(150 * min(1.0, base_alpha))))
+            grad.setColorAt(0.5, QColor(240, 245, 252, int(206 * min(1.0, base_alpha))))
+            grad.setColorAt(0.85, QColor(199, 209, 224, int(190 * min(1.0, base_alpha))))
+        grad.setColorAt(1.0, QColor(158, 172, 195, int(170 * min(1.0, base_alpha))))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(grad)
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
 
-        edge = QColor(40, 55, 75, int(70 + 50 * min(1.0, base_alpha)))
+        # 2. 边缘：细描边 + 内侧一圈极淡反光（Liquid Glass 的"暗边+refraction"极简化版）
+        edge = QColor(38, 52, 72, int(78 + 46 * min(1.0, base_alpha)))
         painter.setPen(QPen(edge, 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
+        inner_hi = QColor(255, 255, 255, int(70 * min(1.0, base_alpha)))
+        painter.setPen(QPen(inner_hi, 1.0))
+        painter.drawEllipse(QPointF(cx, cy), radius - 1.6, radius - 1.6)
 
         # 空闲：中心一颗小点，表明"我在"，但不抢眼
         if not active:
@@ -167,28 +182,28 @@ class BallWidget(QWidget):
             core.setAlpha(int(120 + 80 * min(1.0, base_alpha)))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(core)
-            painter.drawEllipse(QPointF(cx, cy), 2.6 + hover * 0.8, 2.6 + hover * 0.8)
+            painter.drawEllipse(QPointF(cx, cy), 3.4 + hover * 0.9, 3.4 + hover * 0.9)
 
         # 2. 状态表达：一圈极细流光
         if self._status in ("listening", "session"):
             ring = QColor(accent)
             ring.setAlpha(int(90 + 110 * min(1.0, level * 2)))
-            painter.setPen(QPen(ring, 1.3))
-            rr = radius + 2.6 + self._breathe_phase * 1.4 + level * 3.0
+            painter.setPen(QPen(ring, 1.5))
+            rr = radius + 3.2 + self._breathe_phase * 1.6 + level * 3.6
             painter.drawEllipse(QPointF(cx, cy), rr, rr)
         elif self._status == "processing":
             arc_color = QColor(accent)
             arc_color.setAlpha(220)
-            painter.setPen(QPen(arc_color, 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            halo = QRectF(cx - radius - 3.0, cy - radius - 3.0, (radius + 3.0) * 2, (radius + 3.0) * 2)
+            painter.setPen(QPen(arc_color, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            halo = QRectF(cx - radius - 3.6, cy - radius - 3.6, (radius + 3.6) * 2, (radius + 3.6) * 2)
             painter.drawArc(halo, int((self._angle * 3) % 360) * 16, 110 * 16)
         elif self._status == "speaking":
             for i in range(2):
                 phase = (now * 1.05 + i * 0.5) % 1.0
                 ripple = QColor(accent)
                 ripple.setAlpha(int((1.0 - phase) * 80))
-                painter.setPen(QPen(ripple, 1.3))
-                rr = radius + 2.4 + phase * 6.5
+                painter.setPen(QPen(ripple, 1.5))
+                rr = radius + 3.0 + phase * 7.5
                 painter.drawEllipse(QPointF(cx, cy), rr, rr)
 
         painter.end()
@@ -208,6 +223,8 @@ class BallWidget(QWidget):
         if self._press_pos is not None and (new_pos - (self._press_pos - self._drag_offset)).manhattanLength() > 6:
             self._moved = True
         self.move(new_pos)
+        if self.on_moved is not None:
+            self.on_moved()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -280,6 +297,7 @@ class QtFloatingBall:
         self._panel = None
         self._panel_anim = None
         self._hotkey = None
+        self._toast = None
 
     # ---- 全局热键 Alt+Space（ChatGPT 桌面同款唤出方式）----
 
@@ -382,8 +400,11 @@ class QtFloatingBall:
 
         def on_theme_change(choice: str) -> None:
             save_ui_state(theme=choice)
+            resolved = resolve_theme(choice)
             if self._panel is not None:
-                self._panel.set_theme(resolve_theme(choice))
+                self._panel.set_theme(resolved)
+            if self._toast is not None:
+                self._toast.set_theme(resolved)
 
         panel = ChatPanel(
             signals,
@@ -406,6 +427,31 @@ class QtFloatingBall:
         ball = BallWidget(signals, on_click=lambda: self._toggle_panel(panel, ball), level_fn=level_fn)
         self._ball = ball
 
+        # ---- 会话气泡：AI 回话自动浮现，不用点开面板 ----
+        toast = BubbleToast(resolve_theme(theme_choice), on_click=lambda: self._toggle_panel(panel, ball))
+        self._toast = toast
+
+        def ball_anchor() -> QPointF:
+            center = ball.geometry().center()
+            return QPointF(center.x() + ball.width() / 2, center.y())
+
+        def sync_toast() -> None:
+            toast.set_anchor(ball_anchor())
+
+        ball.on_moved = sync_toast
+
+        def on_transcript(text: str) -> None:
+            signals.transcript.emit(text)
+            toast.show_message(text, "User", timeout_ms=6000, anchor=ball_anchor())
+
+        def on_result(text: str) -> None:
+            signals.result.emit(text)
+            # 常驻到播报结束（play_end 再给 3.5s 收尾），不打断你当下的视线
+            toast.show_message(text, "Bot", timeout_ms=None, anchor=ball_anchor())
+
+        self.assistant.on_transcript(on_transcript)
+        self.assistant.on_result(on_result)
+
         def play_start_chain() -> None:
             self.assistant.audio_loop.set_muted_mic()
             signals.status.emit("speaking")
@@ -413,17 +459,19 @@ class QtFloatingBall:
         def play_end_chain() -> None:
             self.assistant.audio_loop.set_unmuted_mic()
             signals.status.emit("session" if self.assistant.in_session else "idle")
+            if self._toast is not None:
+                self._toast.set_timeout(3500)
 
         self.assistant.speaker.on_play_start = play_start_chain
         self.assistant.speaker.on_play_end = play_end_chain
 
-        # 语音线程 → UI 线程
+        # 语音线程 → UI 线程（transcript / result 已在上面接成"面板 + 气泡"双通道）
         self.assistant.on_status(signals.status.emit)
-        self.assistant.on_transcript(signals.transcript.emit)
-        self.assistant.on_result(signals.result.emit)
         self.assistant.on_session(signals.session.emit)
 
         def on_exit() -> None:
+            if self._toast is not None:
+                self._toast.hide_now()
             self._uninstall_hotkey()
             self.assistant.stop()
             QTimer.singleShot(300, app.quit)
