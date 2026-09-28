@@ -34,55 +34,59 @@ CHIP_TEMPLATE = "[已粘贴长文 {n} 字 · 回车发送]"
 
 THEMES = {
     "dark": {
-        "panel_top": "#2a3140",
-        "panel_bottom": "#1e242e",
-        "panel_border": "#3d4757",
-        "panel_border_focus": "#5b6a83",
-        "text": "#f5f8fc",
-        "sub": "#a3aebf",
-        "muted": "#78849a",
-        "reply_bg": "#1a212b",
-        "reply_border": "#2b3441",
-        "bubble_bot_bg": "#2b3442",
-        "bubble_bot_border": "#3a455a",
-        "bubble_info_bg": "#17372c",
-        "bubble_info_border": "#245440",
-        "bubble_info_text": "#8ce9b6",
-        "user_bg": "#2b3442",
-        "user_text": "#f2f7ff",
-        "marker": "#9aa4b6",
-        "btn_hover_bg": "#333d4d",
-        "shadow_alpha": 10,
+        "panel_top": "#242019",
+        "panel_bottom": "#1c1913",
+        "panel_border": "#3a352b",
+        "panel_border_focus": "#6b5d43",
+        "text": "#f2eee4",
+        "sub": "#a89f8d",
+        "muted": "#7d7464",
+        "reply_bg": "#211d16",
+        "reply_border": "#38322a",
+        "bubble_bot_bg": "#2a251d",
+        "bubble_bot_border": "#3d362b",
+        "bubble_info_bg": "#25301f",
+        "bubble_info_border": "#3a4a30",
+        "bubble_info_text": "#a9c79b",
+        "user_bg": "#3a2f22",
+        "user_text": "#f5efe2",
+        "user_line": "#c96442",
+        "marker": "#d97757",
+        "accent": "#d97757",
+        "btn_hover_bg": "#35302a",
+        "shadow_alpha": 12,
     },
     "light": {
-        "panel_top": "#ffffff",
-        "panel_bottom": "#fbfcfe",
-        "panel_border": "#e4e9f1",
-        "panel_border_focus": "#b9c7dc",
-        "text": "#1b2330",
-        "sub": "#5c6a7d",
-        "muted": "#8d99ab",
-        "reply_bg": "#f3f6fb",
-        "reply_border": "#e2e8f2",
-        "bubble_bot_bg": "#e9eef7",
-        "bubble_bot_border": "#d7dfec",
-        "bubble_info_bg": "#e7f7ef",
-        "bubble_info_border": "#c6e9d9",
-        "bubble_info_text": "#116b4b",
-        "user_bg": "#e6ecf6",
-        "user_text": "#1b2330",
-        "marker": "#a5aebc",
-        "btn_hover_bg": "#eef2f9",
-        "shadow_alpha": 7,
+        "panel_top": "#fbfaf4",
+        "panel_bottom": "#f6f3ea",
+        "panel_border": "#e6e1d0",
+        "panel_border_focus": "#c9bd9c",
+        "text": "#292620",
+        "sub": "#6f695c",
+        "muted": "#948c7b",
+        "reply_bg": "#f1eee3",
+        "reply_border": "#e4dfd0",
+        "bubble_bot_bg": "#efeadf",
+        "bubble_bot_border": "#ddd6c4",
+        "bubble_info_bg": "#e9efe0",
+        "bubble_info_border": "#d2dcc6",
+        "bubble_info_text": "#4f7040",
+        "user_bg": "#efe9db",
+        "user_text": "#292620",
+        "user_line": "#c96442",
+        "marker": "#c96442",
+        "accent": "#c96442",
+        "btn_hover_bg": "#efeadd",
+        "shadow_alpha": 8,
     },
 }
 
 DOT_COLORS = {
-    "idle": "#8b95a8",
-    "listening": "#34d399",
-    "processing": "#3b82f6",
-    "speaking": "#a855f7",
-    "session": "#34d399",
+    "idle": "#9a917f",
+    "listening": "#6aa87f",
+    "processing": "#c96442",
+    "speaking": "#d97757",
+    "session": "#6aa87f",
 }
 
 
@@ -101,20 +105,20 @@ def build_style(theme: str) -> str:
     selection-background-color: #3b82f6; selection-color: #ffffff;
 }}
 #SendBtn {{
-    color: #ffffff; background: #1d6fe0;
+    color: #ffffff; background: #c96442;
     border: none; border-radius: 14px; font-size: 12px;
     min-width: 44px; max-width: 44px; min-height: 26px; max-height: 26px;
 }}
-#SendBtn:hover {{ background: #2f7df0; }}
+#SendBtn:hover {{ background: #d97757; }}
 #CloseBtn {{
     color: {t['muted']}; background: transparent; border: none;
     font-size: 12px; max-width: 20px; max-height: 20px;
 }}
 #CloseBtn:hover {{ color: {t['text']}; }}
 #ClearBtn {{ color: {t['muted']}; background: transparent; border: none; font-size: 11px; }}
-#ClearBtn:hover {{ color: #1d6fe0; }}
+#ClearBtn:hover {{ color: {t['accent']}; }}
 #ModelBtn {{
-    color: {t['sub']}; background: transparent; border: none;
+    color: {t['accent']}; background: transparent; border: none;
     font-size: 11px; padding: 2px 6px; border-radius: 6px;
 }}
 #ModelBtn:hover {{ color: {t['text']}; background: {t['btn_hover_bg']}; }}
@@ -130,13 +134,13 @@ def build_style(theme: str) -> str:
 
 
 def build_bubble_style(kind: str, theme: str) -> str:
-    """扁平风：助手消息不加底色（纯文本 + 圆点标记），用户消息浅药丸右对齐。"""
+    """Claude 式排版：用户消息 = 加粗文字 + 左侧 1px 竖线（无底色）；助手 = 纯文本 + 陶土色圆点。"""
     t = THEMES.get(theme, THEMES["light"])
     if kind == "User":
         return (
-            f"QLabel {{ color: {t['user_text']}; font-size: 12px; padding: 6px 10px;"
-            f" background: {t['user_bg']};"
-            " border-radius: 13px; margin-left: 60px; }"
+            f"QLabel {{ color: {t['user_text']}; font-size: 12px; font-weight: 600;"
+            f" padding: 2px 0 2px 9px; background: transparent;"
+            f" border-left: 2px solid {t['user_line']}; margin-left: 48px; }}"
         )
     if kind == "Info":
         return (
@@ -325,28 +329,41 @@ class ChatPanel(QWidget):
         self._activity.hide()
         root.addWidget(self._activity)
 
-        meta_row = QHBoxLayout()
+        # 顶部：极小的关闭键（常驻，ghost）；状态行容器有对话时才出现
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.addStretch(1)
+        close_btn = QPushButton("✕")
+        close_btn.setObjectName("CloseBtn")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet(
+            "#CloseBtn { color: "
+            + THEMES.get(theme, THEMES["light"])["muted"]
+            + "; background: transparent; border: none; font-size: 11px;"
+            " max-width: 18px; max-height: 18px; }"
+            "#CloseBtn:hover { color: "
+            + THEMES.get(theme, THEMES["light"])["sub"]
+            + "; }"
+        )
+        close_btn.clicked.connect(self.hide)
+        header_row.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(header_row)
+
+        self._meta_container = QWidget()
+        meta_row = QHBoxLayout(self._meta_container)
+        meta_row.setContentsMargins(0, 0, 0, 0)
         meta_row.setSpacing(6)
-        self._dot = QLabel()
-        self._dot.setFixedSize(7, 7)
-        self._dot.setStyleSheet("border-radius: 3px; background: #8b95a8;")
         self._status_label = QLabel(f"待唤醒 · {wake_hint}")
         self._status_label.setObjectName("Status")
-        self._model_btn = QPushButton("")
-        self._model_btn.setObjectName("ModelBtn")
-        self._model_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._model_btn.clicked.connect(self._open_model_menu)
         clear_btn = QPushButton("清空")
         clear_btn.setObjectName("ClearBtn")
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         clear_btn.clicked.connect(self.clear_history)
-        meta_row.addWidget(self._dot)
-        meta_row.addSpacing(2)
         meta_row.addWidget(self._status_label)
         meta_row.addStretch(1)
-        meta_row.addWidget(self._model_btn)
         meta_row.addWidget(clear_btn)
-        root.addLayout(meta_row)
+        self._meta_container.hide()
+        root.addWidget(self._meta_container)
 
         # 输入区上方极细分隔线（对话区与输入区分界）
         self._input_divider = QLabel()
@@ -354,24 +371,30 @@ class ChatPanel(QWidget):
         self._input_divider.setFixedHeight(1)
         root.addWidget(self._input_divider)
 
+        # 状态点（输入框左侧的呼吸指示）
+        self._dot = QLabel()
+        self._dot.setFixedSize(7, 7)
+        self._dot.setStyleSheet("border-radius: 3px; background: #9a917f;")
+
         input_row = QHBoxLayout()
-        input_row.setSpacing(6)
+        input_row.setSpacing(7)
+        input_row.addWidget(self._dot, 0, Qt.AlignmentFlag.AlignVCenter)
         self._input = InputEdit()
         self._input.submitted.connect(self._submit)
         self._input.escape_pressed.connect(self._handle_escape)
         self._input.height_changed.connect(self._relayout)
         self._input.focus_changed.connect(self._on_input_focus)
+        self._model_btn = QPushButton("")
+        self._model_btn.setObjectName("ModelBtn")
+        self._model_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._model_btn.clicked.connect(self._open_model_menu)
         self._send_btn = QPushButton("发送")
         self._send_btn.setObjectName("SendBtn")
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_btn.clicked.connect(self._submit)
-        close_btn = QPushButton("✕")
-        close_btn.setObjectName("CloseBtn")
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.clicked.connect(self.hide)
         input_row.addWidget(self._input, 1)
+        input_row.addWidget(self._model_btn, 0, Qt.AlignmentFlag.AlignBottom)
         input_row.addWidget(self._send_btn, 0, Qt.AlignmentFlag.AlignBottom)
-        input_row.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(input_row)
 
 
@@ -418,7 +441,7 @@ class ChatPanel(QWidget):
         base_alpha = THEMES.get(self._theme, THEMES["light"])["shadow_alpha"]
         for i in range(3):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(15, 25, 45, int(base_alpha * (0.4 + i * 0.25))))
+            painter.setBrush(QColor(60, 48, 28, int(base_alpha * (0.4 + i * 0.25))))
             spread = 3 - i
             path = QPainterPath()
             path.addRoundedRect(
@@ -443,12 +466,13 @@ class ChatPanel(QWidget):
     def _relayout(self) -> None:
         reply_h = self._scroll.height() + 7 if self._reply_visible else 0
         activity_h = self._activity.sizeHint().height() if self._activity_visible else 0
-        meta_h = max(16, self._status_label.sizeHint().height())
+        meta_h = (max(16, self._status_label.sizeHint().height()) + 2) if self._reply_visible else 0
+        header_h = 16
         total = (
-            SHADOW_MARGIN + 10 + 2 + 6 + self._input.height() + 4 + meta_h
+            SHADOW_MARGIN + 8 + header_h + 4 + self._input.height() + 6 + meta_h
             + (6 + reply_h if reply_h else 0)
             + (4 + activity_h if activity_h else 0)
-            + 10 + SHADOW_MARGIN + 2
+            + 8 + SHADOW_MARGIN + 2
         )
         self.setFixedWidth(PANEL_W)
         self.setFixedHeight(int(total))
@@ -462,6 +486,7 @@ class ChatPanel(QWidget):
         if not self._scroll.isVisible():
             self._scroll.show()
             self._reply_divider.show()
+            self._meta_container.show()
         if target != self._scroll.height():
             self._scroll.setFixedHeight(target)
         self._relayout()
@@ -526,6 +551,7 @@ class ChatPanel(QWidget):
         self._scroll.hide()
         self._scroll.setFixedHeight(0)
         self._reply_divider.hide()
+        self._meta_container.hide()
         self._reply_visible = False
         self._relayout()
 

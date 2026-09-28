@@ -49,11 +49,11 @@ STATE_TUNING = {
 
 # 状态主色（描边 / 流光环用）
 STATE_ACCENTS = {
-    "idle": "#8b95a8",
-    "listening": "#34d399",
-    "processing": "#3b82f6",
-    "speaking": "#c084fc",
-    "session": "#34d399",
+    "idle": "#9a917f",
+    "listening": "#6aa87f",
+    "processing": "#c96442",
+    "speaking": "#d97757",
+    "session": "#6aa87f",
 }
 
 
