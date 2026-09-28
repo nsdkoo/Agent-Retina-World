@@ -277,14 +277,7 @@ class QtFloatingBall:
         tray.show()
         ball.show()
 
-        # 失焦自动收起面板（带淡出）
-        def _on_focus_changed(_old, new) -> None:
-            if not panel.isVisible():
-                return
-            if new is None or (new is not panel and new is not panel._input and not panel.isAncestorOf(new)):
-                self._fade_panel(False)
-
-        app.focusChanged.connect(_on_focus_changed)
+        # 面板不随焦点自动收起：Esc / ✕ / 再点球关闭，打字中途不会消失
 
         self.assistant.run_in_background()
         app.exec()
