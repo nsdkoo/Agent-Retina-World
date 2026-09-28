@@ -48,6 +48,9 @@ THEMES = {
         "bubble_info_bg": "#17372c",
         "bubble_info_border": "#245440",
         "bubble_info_text": "#8ce9b6",
+        "user_bg": "#2b3442",
+        "user_text": "#f2f7ff",
+        "marker": "#C084FC",
         "btn_hover_bg": "#333d4d",
         "shadow_alpha": 26,
     },
@@ -66,6 +69,9 @@ THEMES = {
         "bubble_info_bg": "#e7f7ef",
         "bubble_info_border": "#c6e9d9",
         "bubble_info_text": "#116b4b",
+        "user_bg": "#e6ecf6",
+        "user_text": "#1b2330",
+        "marker": "#C959DD",
         "btn_hover_bg": "#eef2f9",
         "shadow_alpha": 18,
     },
@@ -121,29 +127,33 @@ def build_style(theme: str) -> str:
 }}
 #ModelBtn:hover {{ color: {t['text']}; background: {t['btn_hover_bg']}; }}
 #Strip {{ border-radius: 1px; {AURORA_STRIP} max-height: 2px; }}
-#ReplyCard {{ background: {t['reply_bg']}; border: 1px solid {t['reply_border']}; border-radius: 12px; }}
+#ReplyCard {{ background: transparent; border: none; }}
+#ReplyDivider {{ background: {t['reply_border']}; max-height: 1px; }}
+#ReplyCard QScrollBar:vertical {{ background: transparent; width: 6px; margin: 2px 0; }}
+#ReplyCard QScrollBar::handle:vertical {{ background: {t['muted']}; border-radius: 3px; min-height: 24px; }}
+#ReplyCard QScrollBar::add-line, #ReplyCard QScrollBar::sub-line {{ height: 0; }}
+#ReplyCard QScrollBar::add-page, #ReplyCard QScrollBar::sub-page {{ background: transparent; }}
 #Status {{ color: {t['sub']}; font-size: 11px; }}
 """
 
 
 def build_bubble_style(kind: str, theme: str) -> str:
+    """扁平风：助手消息不加底色（纯文本 + 圆点标记），用户消息浅药丸右对齐。"""
     t = THEMES.get(theme, THEMES["light"])
     if kind == "User":
         return (
-            "QLabel { color: #ffffff; font-size: 12px; padding: 7px 10px;"
-            " background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #4f46e5);"
-            " border-radius: 11px; border-bottom-right-radius: 4px; margin-left: 40px; }"
+            f"QLabel {{ color: {t['user_text']}; font-size: 12px; padding: 6px 10px;"
+            f" background: {t['user_bg']};"
+            " border-radius: 13px; margin-left: 60px; }"
         )
     if kind == "Info":
         return (
-            f"QLabel {{ color: {t['bubble_info_text']}; font-size: 11px; padding: 6px 9px;"
-            f" background: {t['bubble_info_bg']}; border: 1px solid {t['bubble_info_border']};"
-            " border-radius: 9px; margin: 0 30px; }"
+            f"QLabel {{ color: {t['muted']}; font-size: 11px; padding: 2px 0;"
+            " background: transparent; margin: 0 4px; }"
         )
     return (
-        f"QLabel {{ color: {t['text']}; font-size: 12px; padding: 7px 10px;"
-        f" background: {t['bubble_bot_bg']}; border: 1px solid {t['bubble_bot_border']};"
-        " border-radius: 11px; border-bottom-left-radius: 4px; margin-right: 40px; }"
+        f"QLabel {{ color: {t['text']}; font-size: 12px; padding: 3px 0;"
+        " background: transparent; margin-right: 12px; }"
     )
 
 
@@ -227,7 +237,16 @@ class InputEdit(QTextEdit):
 
 
 def _bubble(text: str, kind: str, theme: str) -> QLabel:
-    label = QLabel(text)
+    if kind == "Bot":
+        import html
+
+        safe = html.escape(text).replace(chr(10), "<br>")
+        marker = THEMES.get(theme, THEMES["light"])["marker"]
+        text = f"<span style='color:{marker}'>&#9679;</span>&nbsp;&nbsp;{safe}"
+        label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.RichText)
+    else:
+        label = QLabel(text)
     label.setObjectName(f"Bubble{kind}")
     label.setStyleSheet(build_bubble_style(kind, theme))
     label.setWordWrap(True)
@@ -329,11 +348,19 @@ class ChatPanel(QWidget):
         meta_row.addWidget(clear_btn)
         root.addLayout(meta_row)
 
+        # 回复区：透明无盒子，上方一条极细分隔线
+        self._reply_divider = QLabel()
+        self._reply_divider.setObjectName("ReplyDivider")
+        self._reply_divider.setFixedHeight(1)
+        self._reply_divider.hide()
+        root.addWidget(self._reply_divider)
+
         self._scroll = QScrollArea()
         self._scroll.setObjectName("ReplyCard")
         self._scroll.setWidgetResizable(True)
         inner = QWidget()
         inner.setObjectName("ReplyInner")
+        inner.setStyleSheet("background: transparent;")
         self._chat_flow = QVBoxLayout(inner)
         self._chat_flow.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._chat_flow.setSpacing(6)
@@ -373,7 +400,7 @@ class ChatPanel(QWidget):
         t = THEMES.get(theme, THEMES["light"])
         inner = self._scroll.widget()
         if inner is not None:
-            inner.setStyleSheet(f"background: {t['reply_bg']};")
+            inner.setStyleSheet("background: transparent;")
         for i in range(self._chat_flow.count()):
             widget = self._chat_flow.itemAt(i).widget()
             if isinstance(widget, QLabel):
@@ -415,7 +442,7 @@ class ChatPanel(QWidget):
     # ---- 高度自适应 ----
 
     def _relayout(self) -> None:
-        reply_h = self._scroll.height() if self._reply_visible else 0
+        reply_h = self._scroll.height() + 7 if self._reply_visible else 0
         activity_h = self._activity.sizeHint().height() if self._activity_visible else 0
         meta_h = max(16, self._status_label.sizeHint().height())
         total = (
@@ -430,11 +457,12 @@ class ChatPanel(QWidget):
             self._on_height_changed()
 
     def _grow_reply_card(self) -> None:
-        content_h = self._chat_flow.sizeHint().height() + 18
-        target = max(56, min(REPLY_MAX_H, content_h))
+        content_h = self._chat_flow.sizeHint().height() + 14
+        target = max(44, min(REPLY_MAX_H, content_h))
         self._reply_visible = True
         if not self._scroll.isVisible():
             self._scroll.show()
+            self._reply_divider.show()
         if target != self._scroll.height():
             self._scroll.setFixedHeight(target)
         self._relayout()
@@ -498,6 +526,7 @@ class ChatPanel(QWidget):
                 widget.deleteLater()
         self._scroll.hide()
         self._scroll.setFixedHeight(0)
+        self._reply_divider.hide()
         self._reply_visible = False
         self._relayout()
 
