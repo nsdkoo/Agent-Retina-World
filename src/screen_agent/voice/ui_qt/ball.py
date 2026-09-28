@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import sys
 import time
@@ -24,6 +25,8 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QWidget
 
 from screen_agent.voice.ui_qt.signals import AssistantSignals
+
+logger = logging.getLogger(__name__)
 
 BALL_SIZE = 84
 
@@ -198,12 +201,65 @@ class BallWidget(QWidget):
 
 
 class QtFloatingBall:
-    """总装：悬浮球 + 对话面板 + 托盘 + 语音助手后台线程。"""
+    """总装：悬浮球 + 输入条 + 托盘 + 全局热键 + 语音助手后台线程。"""
 
     FADE_MS = 150
 
     def __init__(self, assistant) -> None:
         self.assistant = assistant
+        self._panel = None
+        self._panel_anim = None
+        self._hotkey = None
+
+    # ---- 全局热键 Alt+Space（ChatGPT 桌面同款唤出方式）----
+
+    def _install_hotkey(self, app, callback) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        from PyQt6.QtCore import QAbstractNativeEventFilter
+
+        VK_SPACE, MOD_ALT, WM_HOTKEY = 0x20, 0x0001, 0x0312
+
+        class _MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND),
+                ("message", wintypes.UINT),
+                ("wParam", wintypes.WPARAM),
+                ("lParam", wintypes.LPARAM),
+                ("time", wintypes.DWORD),
+                ("pt_x", wintypes.LONG),
+                ("pt_y", wintypes.LONG),
+            ]
+
+        class _Filter(QAbstractNativeEventFilter):
+            def nativeEventFilter(self, event_type, message):  # noqa: N802
+                if event_type == b"windows_generic_MSG":
+                    msg = ctypes.cast(int(message), ctypes.POINTER(_MSG)).contents
+                    if msg.message == WM_HOTKEY:
+                        callback()
+                        return True, 0
+                return False, 0
+
+        try:
+            user32 = ctypes.windll.user32
+            if not user32.RegisterHotKey(None, 1, MOD_ALT, VK_SPACE):
+                logger.warning("全局热键 Alt+Space 注册失败（可能被占用）")
+                return
+            self._hotkey_filter = _Filter()
+            app.installNativeEventFilter(self._hotkey_filter)
+            self._hotkey = (user32, 1)
+        except Exception:
+            logger.warning("全局热键注册异常", exc_info=True)
+
+    def _uninstall_hotkey(self) -> None:
+        if self._hotkey is not None:
+            user32, hotkey_id = self._hotkey
+            try:
+                user32.UnregisterHotKey(None, hotkey_id)
+            except Exception:
+                pass
+            self._hotkey = None
 
     def _recent_activity(self) -> str:
         try:
@@ -228,12 +284,19 @@ class QtFloatingBall:
         signals = AssistantSignals()
 
         level_fn = getattr(self.assistant.audio_loop, "get_level", None)
-        panel = ChatPanel(signals, on_submit_text=self._submit_text, activity_fn=self._recent_activity)
+        panel = ChatPanel(
+            signals,
+            on_submit_text=self._submit_text,
+            activity_fn=self._recent_activity,
+            on_height_changed=self._reposition_panel,
+        )
         panel.setWindowOpacity(0.0)
         self._panel = panel
+        self._ball = None
         self._panel_anim = QPropertyAnimation(panel, b"windowOpacity", panel)
         self._panel_anim.setDuration(self.FADE_MS)
         ball = BallWidget(signals, on_click=lambda: self._toggle_panel(panel, ball), level_fn=level_fn)
+        self._ball = ball
 
         def play_start_chain() -> None:
             self.assistant.audio_loop.set_muted_mic()
@@ -253,6 +316,7 @@ class QtFloatingBall:
         self.assistant.on_session(signals.session.emit)
 
         def on_exit() -> None:
+            self._uninstall_hotkey()
             self.assistant.stop()
             QTimer.singleShot(300, app.quit)
 
@@ -277,7 +341,10 @@ class QtFloatingBall:
         tray.show()
         ball.show()
 
-        # 面板不随焦点自动收起：Esc / ✕ / 再点球关闭，打字中途不会消失
+        # 全局热键 Alt+Space 唤出/收起输入条（与 ChatGPT 桌面伴侣窗同款）
+        self._install_hotkey(app, lambda: self._toggle_panel(panel, ball))
+
+        # 面板不随焦点自动收起：Esc / ✕ / Alt+Space / 再点球关闭，打字中途不会消失
 
         self.assistant.run_in_background()
         app.exec()
@@ -301,19 +368,38 @@ class QtFloatingBall:
             self._panel_anim.finished.connect(self._panel.hide)
         self._panel_anim.start()
 
+    def _panel_anchor(self) -> tuple[int, int]:
+        """把浮条贴着球放：优先球左侧，空间不够换右侧；高度变化时保持锚定。"""
+        ball, panel = self._ball, self._panel
+        geo = ball.geometry()
+        screen = ball.screen() or panel.screen()
+        avail = screen.availableGeometry() if screen is not None else None
+
+        x = geo.left() - panel.width() + 16
+        if avail is not None and x < avail.left() + 8:
+            x = geo.right() - 16
+        y = geo.top() - 6
+        if avail is not None:
+            y = min(y, avail.bottom() - panel.height() - 8)
+            y = max(y, avail.top() + 8)
+            x = min(max(x, avail.left() + 8), avail.right() - panel.width() - 8)
+        return x, y
+
+    def _reposition_panel(self) -> None:
+        if self._panel is None or not self._panel.isVisible():
+            return
+        x, y = self._panel_anchor()
+        self._panel.move(x, y)
+
     def _toggle_panel(self, panel, ball) -> None:
         if panel.isVisible():
             self._fade_panel(False)
             return
-        geo = ball.geometry()
-        screen = ball.screen() or panel.screen()
-        x = geo.left() - panel.width() - 10
-        if screen is not None and x < screen.availableGeometry().left():
-            x = geo.right() + 10
-        y = geo.top() - 20
+        self._panel, self._ball = panel, ball
+        x, y = self._panel_anchor()
         panel.move(x, y)
         self._fade_panel(True)
-        panel._input.setFocus()
+        panel.focus_input()
 
     def _submit_text(self, text: str) -> None:
         """打字输入：与语音共用 handle_command，跑在独立线程。"""

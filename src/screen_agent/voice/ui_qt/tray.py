@@ -84,7 +84,7 @@ class TrayIcon(QSystemTrayIcon):
         menu.addAction(act_toggle)
 
         if on_toggle_panel is not None:
-            act_panel = QAction("显示对话面板", menu)
+            act_panel = QAction("显示输入条（Alt+Space）", menu)
             act_panel.triggered.connect(on_toggle_panel)
             menu.addAction(act_panel)
 
