@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 
 PANEL_W = 356              # 窗口宽（含投影边距）
 SHADOW_MARGIN = 10
-INPUT_MIN_H = 40
+INPUT_MIN_H = 56
 INPUT_MAX_H = 112          # 约 5 行
 REPLY_MAX_H = 196          # 回复卡限高，超出内部滚动
 LONG_TEXT_THRESHOLD = 400  # 超过这么多字折叠成 chip
@@ -232,6 +232,14 @@ class InputEdit(QTextEdit):
         super().keyPressEvent(event)
 
 
+def name_or_hint(wake_hint: str) -> str:
+    """从「喊「瑞塔」」这类提示里取名字；取不到就回退通用称呼。"""
+    try:
+        return wake_hint.split("「")[1].split("」")[0]
+    except Exception:
+        return "你的桌面助手"
+
+
 def _bubble(text: str, kind: str, theme: str) -> QLabel:
     if kind == "Bot":
         import html
@@ -300,6 +308,27 @@ class ChatPanel(QWidget):
         strip.setObjectName("Strip")
         strip.setFixedHeight(2)
         root.addWidget(strip)
+
+        # 空状态欢迎语（有对话后隐藏，清空后重现）
+        t0 = THEMES.get(theme, THEMES["light"])
+        self._greeting = QWidget()
+        self._greeting.setStyleSheet("background: transparent;")
+        gl = QVBoxLayout(self._greeting)
+        gl.setContentsMargins(0, 16, 0, 20)
+        gl.setSpacing(6)
+        greet_title = QLabel(f"你好，我是{name_or_hint(wake_hint)}")
+        greet_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        greet_title.setStyleSheet(
+            f"color: {t0['text']}; font-size: 15px; font-weight: 600; background: transparent;"
+        )
+        greet_sub = QLabel("有什么可以帮你？打字或语音都可以")
+        greet_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        greet_sub.setStyleSheet(
+            f"color: {t0['muted']}; font-size: 12px; background: transparent;"
+        )
+        gl.addWidget(greet_title)
+        gl.addWidget(greet_sub)
+        root.addWidget(self._greeting)
 
         # 回复区：透明无盒子，上方一条极细分隔线
         self._reply_divider = QLabel()
@@ -422,6 +451,11 @@ class ChatPanel(QWidget):
         self._theme = theme
         self.setStyleSheet(build_style(theme))
         t = THEMES.get(theme, THEMES["light"])
+        for child in self._greeting.findChildren(QLabel):
+            if child.text().startswith("你好"):
+                child.setStyleSheet(f"color: {t['text']}; font-size: 15px; font-weight: 600; background: transparent;")
+            else:
+                child.setStyleSheet(f"color: {t['muted']}; font-size: 12px; background: transparent;")
         inner = self._scroll.widget()
         if inner is not None:
             inner.setStyleSheet("background: transparent;")
@@ -470,8 +504,9 @@ class ChatPanel(QWidget):
         activity_h = self._activity.sizeHint().height() if self._activity_visible else 0
         meta_h = (max(16, self._status_label.sizeHint().height()) + 2) if self._reply_visible else 0
         header_h = 16
+        greet_h = 0 if self._reply_visible else self._greeting.sizeHint().height()
         total = (
-            SHADOW_MARGIN + 8 + header_h + 4 + self._input.height() + 6 + meta_h
+            SHADOW_MARGIN + 8 + header_h + greet_h + 4 + self._input.height() + 6 + meta_h
             + (6 + reply_h if reply_h else 0)
             + (4 + activity_h if activity_h else 0)
             + 8 + SHADOW_MARGIN + 2
@@ -498,6 +533,7 @@ class ChatPanel(QWidget):
     def add_bubble(self, text: str, kind: str) -> None:
         if not text:
             return
+        self._greeting.hide()
         align = (
             Qt.AlignmentFlag.AlignRight if kind == "User" else Qt.AlignmentFlag.AlignLeft
         )
@@ -531,6 +567,7 @@ class ChatPanel(QWidget):
         return f"<span style='color:{marker}'>&#9679;</span>&nbsp;&nbsp;{safe}"
 
     def _on_partial(self, text: str) -> None:
+        self._greeting.hide()
         if self._pending_reply is None:
             # 占位气泡：正常气泡样式（不斜体），先显示「正在输入…」
             label = QLabel("")
@@ -658,6 +695,7 @@ class ChatPanel(QWidget):
         self._reply_divider.hide()
         self._meta_container.hide()
         self._reply_visible = False
+        self._greeting.show()
         self._relayout()
 
     # ---- 状态 ----
