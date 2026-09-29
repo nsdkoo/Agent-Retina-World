@@ -138,6 +138,20 @@ class VoiceAssistant:
         self._consolidation_stop = threading.Event()
 
         chat_client = build_chat_client(chat_cfg)
+        # GUI 操控视觉配置：vlm 段优先，缺 key 时回退硅基流动环境变量
+        # （必须在 executor 构造前赋值——修复 L150 引用未定义属性的启动崩溃）
+        vlm_cfg = raw.get("vlm", {}) if isinstance(raw.get("vlm", {}), dict) else {}
+        tools_cfg = raw.get("tools", {}) if isinstance(raw.get("tools", {}), dict) else {}
+        gui_cfg = tools_cfg.get("gui_agent", {}) if isinstance(tools_cfg.get("gui_agent", {}), dict) else {}
+        self._vision_cfg = {
+            "base_url": vlm_cfg.get("base_url") or "https://api.siliconflow.cn/v1",
+            "model": vlm_cfg.get("model") or "Qwen/Qwen2.5-VL-32B-Instruct",
+            "api_key": vlm_cfg.get("api_key") or "",
+            "api_key_env": vlm_cfg.get("api_key_env") or "SILICONFLOW_API_KEY",
+        }
+        self._gui_max_steps = int(gui_cfg.get("max_steps", 5))
+        self.app_aliases: dict[str, str] = voice_cfg.get("apps", {})
+        self.url_aliases: dict[str, str] = voice_cfg.get("urls", {})
         self.executor = CommandExecutor(
             self.pipeline,
             web_url=self.web_url,
@@ -150,19 +164,6 @@ class VoiceAssistant:
             vision_cfg=self._vision_cfg,
             gui_max_steps=self._gui_max_steps,
         )
-        self.app_aliases: dict[str, str] = voice_cfg.get("apps", {})
-        # GUI 操控视觉配置：vlm 段优先，缺 key 时回退硅基流动环境变量
-        vlm_cfg = raw.get("vlm", {}) if isinstance(raw.get("vlm", {}), dict) else {}
-        tools_cfg = raw.get("tools", {}) if isinstance(raw.get("tools", {}), dict) else {}
-        gui_cfg = tools_cfg.get("gui_agent", {}) if isinstance(tools_cfg.get("gui_agent", {}), dict) else {}
-        self._vision_cfg = {
-            "base_url": vlm_cfg.get("base_url") or "https://api.siliconflow.cn/v1",
-            "model": vlm_cfg.get("model") or "Qwen/Qwen2.5-VL-32B-Instruct",
-            "api_key": vlm_cfg.get("api_key") or "",
-            "api_key_env": vlm_cfg.get("api_key_env") or "SILICONFLOW_API_KEY",
-        }
-        self._gui_max_steps = int(gui_cfg.get("max_steps", 5))
-        self.url_aliases: dict[str, str] = voice_cfg.get("urls", {})
 
         self._in_session = False
         self._session_until = 0.0

@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from screen_agent.tools.registry import ToolRegistry
-from screen_agent.voice.executor import ActionResult
+from screen_agent.tools.base import ActionResult
 
 VALID_ACTIONS = {"click", "double_click", "right_click", "type", "key", "scroll", "done", "fail"}
 

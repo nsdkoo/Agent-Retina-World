@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Callable
 
-from screen_agent.voice.executor import ActionResult
+from screen_agent.tools.base import ActionResult, ConfirmationNeeded
 
 
 class PlatformError(RuntimeError):
@@ -48,6 +48,25 @@ class ToolRegistry:
             return specs
         return [s for s in specs if s.risk <= max_risk]
 
+    def list_openai_tools(self, max_risk: RiskLevel | None = None) -> list[dict]:
+        """ToolSpec → OpenAI function calling schema（喂给 LLM 自主选工具）。"""
+        tools = []
+        for spec in self.list_tools(max_risk=max_risk):
+            props = {k: {"type": "string", "description": v} for k, v in spec.params_doc.items()}
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": props,
+                        "required": list(props.keys()),
+                    },
+                },
+            })
+        return tools
+
     def run(self, name: str, **params) -> ActionResult:
         spec = self._tools.get(name)
         if spec is None:
@@ -56,6 +75,8 @@ class ToolRegistry:
             try:
                 if not self._confirm_fn(spec, params):
                     return ActionResult(success=False, message=f"已取消：{spec.description}")
+            except ConfirmationNeeded as exc:
+                return ActionResult(success=False, message=exc.message)
             except Exception as exc:  # noqa: BLE001 - 确认钩子失败视为取消
                 return ActionResult(success=False, message=f"确认失败已取消：{exc}")
         try:

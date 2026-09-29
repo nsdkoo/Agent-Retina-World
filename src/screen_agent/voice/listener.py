@@ -37,7 +37,16 @@ class Speaker:
     def say(self, text: str) -> None:
         if not self.enabled or not text:
             return
-        self._queue.put(text[:200])
+        # 截断放宽到 500 字，且尽量断在句末（不再无声砍半句）
+        if len(text) > 500:
+            cut = text[:500]
+            for sep in ('。', '！', '？', '；', '.'):
+                pos = cut.rfind(sep)
+                if pos > 200:
+                    cut = cut[:pos + 1]
+                    break
+            text = cut + '……（后面还有，看面板全文）'
+        self._queue.put(text)
 
     def stop(self) -> None:
         self._queue.put(None)

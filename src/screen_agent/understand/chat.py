@@ -50,7 +50,7 @@ class OpenAICompatibleChatClient:
         model: str,
         api_key: str,
         fallback_model: str = "gpt-5.4",
-        max_tokens: int = 256,
+        max_tokens: int = 1024,
         timeout: float = 60.0,
     ) -> None:
         import httpx
@@ -97,6 +97,60 @@ class OpenAICompatibleChatClient:
         resp.raise_for_status()
         data = resp.json()
         return str(data["choices"][0]["message"]["content"]).strip()
+
+    def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        system: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> dict[str, Any]:
+        """带工具定义的非流式补全。返回 {"content", "tool_calls", "raw_tool_calls"}。"""
+        payload_messages: list[dict[str, Any]] = []
+        if system:
+            payload_messages.append({"role": "system", "content": system})
+        payload_messages.extend(messages)
+
+        last_error: Exception | None = None
+        for model in (self.model, self.fallback_model):
+            if not model:
+                continue
+            try:
+                headers = {"Authorization": f"Bearer {self.api_key}"}
+                payload: dict[str, Any] = {
+                    "model": model,
+                    "messages": payload_messages,
+                    "max_tokens": self.max_tokens,
+                }
+                if tools:
+                    payload["tools"] = tools
+                resp = self._client.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                message = resp.json()["choices"][0]["message"]
+                raw_calls = message.get("tool_calls") or []
+                tool_calls = [
+                    {
+                        "id": tc.get("id") or "",
+                        "name": tc["function"]["name"],
+                        "arguments": tc["function"].get("arguments") or "{}",
+                    }
+                    for tc in raw_calls
+                    if isinstance(tc, dict) and "function" in tc
+                ]
+                return {
+                    "content": str(message.get("content") or "").strip(),
+                    "tool_calls": tool_calls,
+                    "raw_tool_calls": raw_calls,
+                }
+            except Exception as exc:
+                last_error = exc
+                logger.warning("带工具补全 %s 失败: %s", model, exc)
+        if last_error:
+            raise last_error
+        raise RuntimeError("带工具补全失败")
 
     def complete_stream(
         self,
@@ -277,7 +331,7 @@ def build_chat_client(chat_cfg: dict[str, Any]) -> OpenAICompatibleChatClient | 
 
     backends_cfg = chat_cfg.get("backends")
     if isinstance(backends_cfg, list) and backends_cfg:
-        max_tokens = int(chat_cfg.get("max_tokens", 256))
+        max_tokens = int(chat_cfg.get("max_tokens", 1024))
         timeout = float(chat_cfg.get("timeout", 60))
         backends = [
             _build_backend(entry, max_tokens, timeout)
@@ -303,6 +357,6 @@ def build_chat_client(chat_cfg: dict[str, Any]) -> OpenAICompatibleChatClient | 
         model=chat_cfg.get("model", "gpt-5.4-mini"),
         api_key=api_key,
         fallback_model=chat_cfg.get("fallback_model", "gpt-5.4"),
-        max_tokens=int(chat_cfg.get("max_tokens", 256)),
+        max_tokens=int(chat_cfg.get("max_tokens", 1024)),
         timeout=float(chat_cfg.get("timeout", 60)),
     )

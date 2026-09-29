@@ -47,7 +47,7 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
     if re.search(r"截图|截屏|截个图|截下图", text):
         return Intent(IntentType.SCREENSHOT, raw_command=text)
 
-    if re.search(r"分析屏幕|看看屏幕|理解屏幕|我在干什么|看看我在|屏幕理解", text):
+    if re.search(r"分析(?:一下)?屏幕|看看屏幕|理解(?:一下)?屏幕|我在干什么|看看我在|屏幕理解", text):
         return Intent(IntentType.ANALYZE_SCREEN, raw_command=text)
 
     # ---- 工具层意图（CLOSE_APP 需在 END_SESSION 前，避免"退出微信"被截胡）----

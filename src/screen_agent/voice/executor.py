@@ -1,24 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import webbrowser
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from screen_agent.pipeline import PerceptionPipeline
+from screen_agent.tools.base import ActionResult, ConfirmationNeeded
 from screen_agent.understand.chat import DisabledChatClient, OpenAICompatibleChatClient, SYSTEM_PROMPT
 from screen_agent.voice.intents import Intent, IntentType
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ActionResult:
-    success: bool
-    message: str
-    detail: dict | None = None
 
 
 class CommandExecutor:
@@ -47,13 +41,28 @@ class CommandExecutor:
         self.on_chat_delta = on_chat_delta
         self._app_resolver = None  # 惰性初始化（tools.apps.AppResolver）
         self._registry = None      # 惰性初始化（tools.registry_setup.build_default_registry）
+        self._pending_confirm: str | None = None  # HIGH 级工具两步确认签名
 
-    def _run_tool(self, tool: str, params: dict) -> ActionResult:
+    def _confirm_high_risk(self, spec, params) -> bool:  # noqa: ANN001
+        """HIGH 级工具两步确认：同一指令再说一遍即执行（语音/打字场景的轻量 human-in-the-loop）。"""
+        signature = json.dumps([spec.name, params], sort_keys=True, ensure_ascii=False)
+        if self._pending_confirm == signature:
+            self._pending_confirm = None
+            return True
+        self._pending_confirm = signature
+        raise ConfirmationNeeded(
+            f"即将{spec.description}（高危操作）。再说一遍同样的指令以确认执行"
+        )
+
+    def _registry_with_confirm(self):
         if self._registry is None:
             from screen_agent.tools.registry_setup import build_default_registry
 
-            self._registry = build_default_registry()
-        return self._registry.run(tool, **params)
+            self._registry = build_default_registry(confirm_fn=self._confirm_high_risk)
+        return self._registry
+
+    def _run_tool(self, tool: str, params: dict) -> ActionResult:
+        return self._registry_with_confirm().run(tool, **params)
 
     def run(self, intent: Intent) -> ActionResult:
         if intent.tool:
@@ -100,9 +109,75 @@ class CommandExecutor:
             ctx = self._screen_context_fn()
             if ctx:
                 system = f"{SYSTEM_PROMPT}\n\n最近屏幕活动：{ctx}"
+        # 记忆注入（之前收参未调用——记忆系统对 chat 全程不可见的根因）
+        if self._memory_context_fn:
+            try:
+                memory_block = self._memory_context_fn(user_text)
+                if memory_block:
+                    system = f"{system}\n\n{memory_block}"
+            except Exception:  # noqa: BLE001 - 记忆失败不阻断对话
+                logger.exception("记忆上下文装配失败")
 
         messages = list(self.chat_history)
         messages.append({"role": "user", "content": user_text})
+
+        # 工具轮：LLM 自主选工具（仅暴露 SAFE/LOW 级，HIGH 不自动暴露），≤3 轮
+        tools_used = 0
+        if hasattr(self.chat_client, "complete_with_tools") and self._registry is not None:
+            openai_tools = self._registry.list_openai_tools(max_risk=RiskLevel.LOW)
+            for _ in range(3):
+                if not openai_tools:
+                    break
+                try:
+                    resp = self.chat_client.complete_with_tools(
+                        messages, system=system, tools=openai_tools
+                    )
+                except Exception as exc:  # noqa: BLE001 - 工具轮失败降级为纯对话
+                    logger.warning("工具轮失败，降级纯对话: %s", exc)
+                    break
+                tool_calls = resp.get("tool_calls") or []
+                if not tool_calls:
+                    content = resp.get("content") or ""
+                    if content:
+                        # 模型无需工具直接作答
+                        self.chat_history.append({"role": "user", "content": user_text})
+                        self.chat_history.append({"role": "assistant", "content": content})
+                        if len(self.chat_history) > self.max_history:
+                            del self.chat_history[: len(self.chat_history) - self.max_history]
+                        return ActionResult(success=True, message=content, detail={"chat": True, "tools_used": tools_used})
+                    break
+                messages.append({
+                    "role": "assistant",
+                    "content": resp.get("content") or "",
+                    "tool_calls": resp.get("raw_tool_calls") or [],
+                })
+                for call in tool_calls:
+                    name = call.get("name", "")
+                    try:
+                        args = json.loads(call.get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = self._registry.run(name, **args)
+                    tools_used += 1
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.get("id") or f"call_{tools_used}",
+                        "content": result.message[:500],
+                    })
+            if tools_used:
+                # 工具结果已注入上下文——最终回复走流式（无 tools），保留打字体验
+                try:
+                    reply = self.chat_client.complete_stream(
+                        messages, system=system, on_delta=self.on_chat_delta
+                    )
+                    self.chat_history.append({"role": "user", "content": user_text})
+                    self.chat_history.append({"role": "assistant", "content": reply})
+                    if len(self.chat_history) > self.max_history:
+                        del self.chat_history[: len(self.chat_history) - self.max_history]
+                    return ActionResult(success=True, message=reply, detail={"chat": True, "tools_used": tools_used})
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("工具轮后的流式回复失败")
+                    return ActionResult(success=False, message=f"对话失败：{exc}")
 
         try:
             if self.on_chat_delta is not None:
