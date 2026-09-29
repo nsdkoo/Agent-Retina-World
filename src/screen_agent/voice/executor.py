@@ -46,8 +46,19 @@ class CommandExecutor:
         self._memory_context_fn = memory_context_fn
         self.on_chat_delta = on_chat_delta
         self._app_resolver = None  # 惰性初始化（tools.apps.AppResolver）
+        self._registry = None      # 惰性初始化（tools.registry_setup.build_default_registry）
+
+    def _run_tool(self, tool: str, params: dict) -> ActionResult:
+        if self._registry is None:
+            from screen_agent.tools.registry_setup import build_default_registry
+
+            self._registry = build_default_registry()
+        return self._registry.run(tool, **params)
 
     def run(self, intent: Intent) -> ActionResult:
+        if intent.tool:
+            # 工具层意图：正则只路由，参数解析已下沉
+            return self._run_tool(intent.tool, intent.params)
         handlers = {
             IntentType.SCREENSHOT: self._screenshot,
             IntentType.ANALYZE_SCREEN: self._analyze,

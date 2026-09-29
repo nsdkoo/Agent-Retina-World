@@ -8,6 +8,19 @@ from screen_agent.voice.executor import ActionResult
 # 系统进程白名单：close/list 场景不碰
 _SYSTEM_PROCESSES = {"explorer", "winlogon", "csrss", "dwm", "system", "registry"}
 
+# 中文名 → 实际 exe 名（国产应用 exe 多为英文）
+_COMMON_EXE = {
+    "微信": "WeChat",
+    "企业微信": "WXWork",
+    "qq": "QQ",
+    "钉钉": "DingTalk",
+    "网易云音乐": "cloudmusic",
+    "QQ音乐": "QQMusic",
+    "飞书": "Feishu",
+    "抖音": "douyin",
+    "百度网盘": "BaiduNetdisk",
+}
+
 
 def list_windows() -> ActionResult:
     from screen_agent.tools import _win
@@ -47,10 +60,11 @@ def focus_window(title: str) -> ActionResult:
 
 
 def close_app_safe(exe_name: str) -> ActionResult:
-    """关闭应用（taskkill），系统进程白名单硬拒绝。"""
+    """关闭应用（taskkill），系统进程白名单硬拒绝，中文名自动映射 exe。"""
     import subprocess
 
-    stem = exe_name.lower().removesuffix(".exe")
+    mapped = _COMMON_EXE.get(exe_name.strip(), exe_name)
+    stem = mapped.lower().removesuffix(".exe")
     if stem in _SYSTEM_PROCESSES:
         return ActionResult(success=False, message=f"「{exe_name}」是系统进程，拒绝关闭")
     try:
