@@ -34,6 +34,7 @@ class VoiceAssistant:
         web_cfg = raw.get("web", {})
         sherpa_cfg = voice_cfg.get("sherpa", {}) if isinstance(voice_cfg.get("sherpa", {}), dict) else {}
         root = project_root or config_path.parent
+        self.project_root = root
 
         self.wake_names: list[str] = voice_cfg.get("wake_names", ["Retina", "小光", "光光"])
         self.session_enabled = bool(voice_cfg.get("session_mode", True))

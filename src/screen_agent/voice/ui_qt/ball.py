@@ -435,6 +435,14 @@ class QtFloatingBall:
             panel.set_model_label(name)
             on_model_change(name)
 
+        def _create_shortcut_notify() -> None:
+            from screen_agent.voice.shortcuts import create_shortcuts
+            try:
+                lines = create_shortcuts(self.assistant.project_root)
+                tray.showMessage("瑞塔", chr(10).join(lines), QSystemTrayIcon.MessageIcon.Information, 3000)
+            except Exception as exc:
+                tray.showMessage("瑞塔", f"创建失败：{exc}", QSystemTrayIcon.MessageIcon.Critical, 4000)
+
         tray = TrayIcon(
             ball,
             on_exit=on_exit,
@@ -443,6 +451,7 @@ class QtFloatingBall:
             on_model_switched=on_model_switched if switchable else None,
             theme_choice=theme_choice,
             on_theme_change=on_theme_change,
+            on_create_shortcut=_create_shortcut_notify,
         )
         tray.show()
         ball.show()

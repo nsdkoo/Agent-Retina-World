@@ -83,6 +83,7 @@ class TrayIcon(QSystemTrayIcon):
         on_model_switched=None,
         theme_choice: str = "auto",
         on_theme_change=None,
+        on_create_shortcut=None,
     ) -> None:
         super().__init__(_make_icon())
         self._ball = ball_widget
@@ -138,6 +139,12 @@ class TrayIcon(QSystemTrayIcon):
         menu.addAction(self._autostart_action)
 
         menu.addSeparator()
+
+        if on_create_shortcut is not None:
+            act_shortcut = QAction("创建桌面快捷方式", menu)
+            act_shortcut.triggered.connect(on_create_shortcut)
+            menu.addAction(act_shortcut)
+
         act_exit = QAction("退出", menu)
         act_exit.triggered.connect(on_exit)
         menu.addAction(act_exit)
