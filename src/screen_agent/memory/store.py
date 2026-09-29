@@ -208,6 +208,20 @@ class MemoryStoreV2:
             "categories": self.time_by_category(),
         }
 
+    def bump_event_importance(self, event_id: str, delta: int = 1, cap: int = 3) -> int:
+        """反思回填：事件被对话实际引用过 → importance 提权（封顶 cap）。返回新值。"""
+        with _db_connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COALESCE(importance, 1) FROM events WHERE event_id = ?", (event_id,)
+            ).fetchone()
+            if row is None:
+                return 0
+            new_val = min(cap, int(row[0]) + delta)
+            conn.execute(
+                "UPDATE events SET importance = ? WHERE event_id = ?", (new_val, event_id)
+            )
+            return new_val
+
     def event_importance(self, event_id: str) -> int:
         with _db_connect(self.db_path) as conn:
             row = conn.execute(
@@ -238,7 +252,10 @@ class MemoryStoreV2:
         source: str = "chat_rule",
         confidence: float = 0.6,
         evidence: str = "",
+        supersede_keyword: str | None = None,
     ) -> Fact:
+        """supersede_keyword：显式替换——同 category 下内容含该关键词的旧 fact
+        降级为 confidence 0.15（保留供审计），避免陈旧偏好污染检索（Mem0 对账的显式形态）。"""
         """写 fact 前对账：同 category 下归一化内容相同 → 更新 last_seen 与 confidence，不追加。"""
         if category not in _FACT_CATEGORIES:
             raise ValueError(f"未知 fact 类别: {category}")
@@ -253,6 +270,11 @@ class MemoryStoreV2:
                 if _normalize(existing) == norm:
                     new_conf = min(1.0, max(float(conf), confidence) + 0.1)
                     ev = evidence or (old_ev or "")
+                    if supersede_keyword:
+                        conn.execute(
+                            "UPDATE facts SET confidence = 0.15 WHERE category = ? AND content LIKE ? AND fact_id != ?",
+                            (category, f"%{supersede_keyword}%", fact_id),
+                        )
                     conn.execute(
                         "UPDATE facts SET last_seen_at = ?, confidence = ?, evidence = ? WHERE fact_id = ?",
                         (now.isoformat(), new_conf, ev, fact_id),
@@ -275,6 +297,11 @@ class MemoryStoreV2:
                 """,
                 (fact.fact_id, category, content, source, confidence, now.isoformat(), now.isoformat(), evidence),
             )
+            if supersede_keyword:
+                conn.execute(
+                    "UPDATE facts SET confidence = 0.15 WHERE category = ? AND fact_id != ? AND content LIKE ?",
+                    (category, fact.fact_id, f"%{supersede_keyword}%"),
+                )
             return fact
 
     def list_facts(self, category: str | None = None, limit: int = 50) -> list[Fact]:

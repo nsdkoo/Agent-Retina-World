@@ -21,9 +21,19 @@ _NAME_PATTERNS = [
 ]
 _PREF_PATTERN = re.compile(r"我(?:喜欢|常用|一般用)([^，。,.!！?？]{1,20})")
 _REMEMBER_PATTERN = re.compile(r"记住[：:]?(.{1,40})")
+_RENOUNCE_RE = re.compile(r"(?:不再|不喜欢|不用|卸载了?)([\u4e00-\u9fffA-Za-z0-9_]{1,16})")
+_SWITCH_RE = re.compile(r"把([^，。,.!！?？]{1,12})换成([^，。,.!！?？]{1,12})")
 _PROJECT_PATTERN = re.compile(r"我在做(?:一个)?([^，。,.!！?？]{1,24})(?:项目|系统|工具|助手)?")
 
 _MINING_MIN_MINUTES = 30.0
+
+# 梦境期 LLM 候选提取提示词：模型提议、规则裁决（防幻觉直写）
+EXTRACTION_PROMPT = (
+    "从下面的对话中提取关于用户的、值得长期记住的事实（身份、偏好、习惯、正在进行的项目）。{NL}"
+    "每行一条，格式严格为：类别|内容{NL}"
+    "类别只能是 profile / preference / project / entity 之一。{NL}"
+    "只提取稳定信息；忽略闲聊、问候、临时上下文；最多 5 条；没有就只输出：无{NL}{NL}对话：{NL}{turns}"
+).replace("{NL}", chr(10))
 _QUESTION_RE = re.compile(r"[?？]|吗[？?]?\s*$|什么|哪些|怎么|怎么样|多少|几[点个时]|是谁|在哪")
 
 
@@ -59,6 +69,28 @@ class Consolidator:
         m = _PROJECT_PATTERN.search(user_text)
         if m and not is_question:
             self.store.add_fact("project", f"用户在做：{m.group(1).strip()}", source="chat_rule", confidence=0.7, evidence=evidence)
+            written += 1
+        # 显式放弃/更换：新 fact 入库 + 旧 fact 降级（supersede）
+        m = _RENOUNCE_RE.search(user_text)
+        if m and not is_question:
+            old_term = m.group(1).strip()
+            for prefix in ("喜欢", "用"):
+                if old_term.startswith(prefix) and len(old_term) > len(prefix):
+                    old_term = old_term[len(prefix):]
+            old_term = old_term.rstrip("了").strip()
+            if old_term:
+                self.store.add_fact(
+                    "preference", f"用户不再用/喜欢：{old_term}", source="chat_rule",
+                    confidence=0.8, evidence=evidence, supersede_keyword=old_term,
+                )
+                written += 1
+        m = _SWITCH_RE.search(user_text)
+        if m and not is_question:
+            old_term, new_term = m.group(1).strip(), m.group(2).strip()
+            self.store.add_fact(
+                "preference", f"用户改用：{new_term}", source="chat_rule",
+                confidence=0.85, evidence=evidence, supersede_keyword=old_term,
+            )
             written += 1
 
         # P1 LLM hook：模型产候选（"category|content" 行），规则校验入库

@@ -238,3 +238,50 @@ class VectorChannelTests(unittest.TestCase):
         r = HybridRetriever(self.store)
         got = r.retrieve("支付", top_k=2)
         self.assertTrue(got)  # 无向量通道不报错
+
+
+class SupersedeTests(unittest.TestCase):
+    """显式替换：放弃/换用 → 旧偏好降级，新偏好可信。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = MemoryStoreV2(Path(self.tmp.name) / "events.db")
+        self.consolidator = Consolidator(self.store)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_renounce_downgrades_old_preference(self) -> None:
+        self.consolidator.extract_from_turn("我喜欢用深色主题", evidence="s-1")
+        old = self.store.list_facts(category="preference")[0]
+        self.assertGreater(old.confidence, 0.5)
+        self.consolidator.extract_from_turn("我不再喜欢深色主题了，改用浅色", evidence="s-2")
+        confs = {f.content: f.confidence for f in self.store.list_facts(category="preference")}
+        downgraded = [
+            c for content, c in confs.items() if "深色" in content and "不再" not in content
+        ]
+        self.assertTrue(downgraded and all(c <= 0.15 for c in downgraded))
+
+    def test_switch_replaces_old(self) -> None:
+        self.consolidator.extract_from_turn("我喜欢用 PyCharm 写代码", evidence="s-1")
+        self.consolidator.extract_from_turn("把 PyCharm 换成 Cursor", evidence="s-2")
+        confs = {f.content: f.confidence for f in self.store.list_facts(category="preference")}
+        self.assertTrue(any("Cursor" in c for c in confs))
+        old = [c for content, c in confs.items() if "PyCharm" in content]
+        self.assertTrue(old and all(c <= 0.15 for c in old))
+
+    def test_bump_importance_cap(self) -> None:
+        e = _event(1, hours_ago=1)
+        e.importance = 3
+        self.store.save_event(e)
+        import sqlite3
+
+        conn = sqlite3.connect(self.store.db_path)
+        try:
+            conn.execute("UPDATE events SET importance = 3 WHERE event_id = ?", (e.event_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        new_val = self.store.bump_event_importance(e.event_id)
+        self.assertEqual(new_val, 3)  # 封顶
+        self.assertEqual(self.store.bump_event_importance("act-99999"), 0)  # 不存在

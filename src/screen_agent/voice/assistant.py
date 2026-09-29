@@ -10,7 +10,8 @@ from typing import Callable
 
 from screen_agent.config import load_yaml
 from screen_agent.pipeline import PerceptionPipeline
-from screen_agent.understand.chat import SYSTEM_PROMPT, build_chat_client
+from screen_agent.understand.chat import SYSTEM_PROMPT, DisabledChatClient, build_chat_client
+from screen_agent.memory.consolidate import EXTRACTION_PROMPT
 from screen_agent.memory.assembler import ContextAssembler
 from screen_agent.memory.consolidate import Consolidator
 from screen_agent.memory.retriever import HybridRetriever
@@ -277,6 +278,12 @@ class VoiceAssistant:
                 self.memory.append_turn(self._session_id, "user", command)
                 self.memory.append_turn(self._session_id, "assistant", result.message)
                 self._unconsolidated.append((command, result.message))
+                # MemOS 式反思回填：被对话实际引用的 episode importance 提权
+                for eid in getattr(self.assembler, "last_used_event_ids", []):
+                    try:
+                        self.memory.bump_event_importance(eid)
+                    except Exception:
+                        pass
             except Exception:
                 logger.debug("记忆固化/持久化失败", exc_info=True)
         if intent.type == IntentType.END_SESSION:
@@ -406,6 +413,27 @@ class VoiceAssistant:
                     self.consolidator.extract_from_turn(
                         user_text, reply, evidence=f"session:{self._session_id}"
                     )
+                # 梦境期 LLM 候选提取：模型提议、规则裁决（格式校验后才入库）
+                if self._unconsolidated and self.chat_enabled:
+                    chat_client = getattr(self.executor, "chat_client", None)
+                    if chat_client is not None and not isinstance(chat_client, DisabledChatClient):
+                        sep = chr(10) * 2
+                        turns_text = sep.join(
+                            f"用户：{u}{chr(10)}助手：{r}" for u, r in self._unconsolidated
+                        )
+                        reply_text = chat_client.complete(
+                            [{"role": "user", "content": EXTRACTION_PROMPT.format(turns=turns_text)}]
+                        )
+                        for line in (ln.strip() for ln in reply_text.splitlines()):
+                            if "|" not in line:
+                                continue
+                            category, _, content = line.partition("|")
+                            category, content = category.strip(), content.strip()
+                            if category in ("profile", "preference", "project", "entity") and 0 < len(content) <= 80:
+                                self.memory.add_fact(
+                                    category, content, source="chat_llm",
+                                    confidence=0.55, evidence=f"dream:{self._session_id}",
+                                )
                 self._unconsolidated.clear()
             except Exception:
                 logger.debug("睡眠固化失败", exc_info=True)

@@ -30,6 +30,7 @@ class ContextAssembler:
         self.budget_tokens = budget_tokens
         self.max_facts = max_facts
         self.max_episodes = max_episodes
+        self.last_used_event_ids: list[str] = []
 
     def build_system_prompt(self, base_prompt: str, user_text: str | None = None) -> str:
         sections: list[tuple[str, str]] = []
@@ -47,6 +48,8 @@ class ContextAssembler:
             sections.append(("用户记忆", "\n".join(fact_lines)))
 
         episodes = self.retriever.retrieve(query=user_text, top_k=self.max_episodes)
+        # 反思回填轨迹：实际进入上下文的 episodes（MemOS 式 importance 提权依据）
+        self.last_used_event_ids = [s.event.event_id for s in episodes if s.event.event_id]
         if episodes:
             sections.append(("相关屏幕活动", format_for_prompt(episodes)))
 
