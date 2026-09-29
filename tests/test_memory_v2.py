@@ -193,3 +193,48 @@ class ConsolidatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VectorChannelTests(unittest.TestCase):
+    """向量检索通道：假 embedder 验证回填、检索与三维打分融合。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        db = Path(self.tmp.name) / "events.db"
+        self.store = MemoryStoreV2(db)
+
+        class FakeEmbedder:
+            """支付域 → [1,0]；其他 → [0,1]，确定性可断言。"""
+
+            def embed(self, text: str) -> list[float]:
+                return [1.0, 0.0] if ("支付" in text or "付款" in text) else [0.0, 1.0]
+
+        from screen_agent.memory.vector import MemoryVectors
+
+        self.vectors = MemoryVectors(db, FakeEmbedder())
+        e1 = _event(1, hours_ago=2, summary="调试支付网关接口")
+        e2 = _event(2, hours_ago=1, summary="浏览短视频网站")
+        self.store.save_event(e1)
+        self.store.save_event(e2)
+        self.events = [e1, e2]
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_backfill_and_search(self) -> None:
+        self.assertEqual(self.vectors.backfill(self.events), 2)
+        self.assertEqual(self.vectors.backfill(self.events), 0)  # 已有不再算
+        hits = self.vectors.search("支付付款相关", top_k=2)
+        self.assertEqual(hits[0][0], "act-00001")  # 语义近的排前
+        self.assertGreater(hits[0][1], hits[1][1])
+
+    def test_retriever_blends_vector_relevance(self) -> None:
+        self.vectors.backfill(self.events)
+        r = HybridRetriever(self.store, vector_search=self.vectors.search)
+        got = r.retrieve("支付 网关", top_k=2)
+        self.assertEqual(got[0].event.event_id, "act-00001")
+
+    def test_no_vector_search_still_works(self) -> None:
+        r = HybridRetriever(self.store)
+        got = r.retrieve("支付", top_k=2)
+        self.assertTrue(got)  # 无向量通道不报错

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -92,7 +93,27 @@ class VoiceAssistant:
         # ---- 记忆系统 v2：分层存储 + 三维检索 + 装配器 + 固化器 ----
         memory_cfg = raw.get("memory", {}) if isinstance(raw.get("memory", {}), dict) else {}
         self.memory = MemoryStoreV2(root / memory_cfg.get("db_path", "data/memory/events.db"))
-        self.retriever = HybridRetriever(self.memory)
+        # 向量通道（可选）：硅基流动 bge-m3 免费/OpenAI 兼容端点；未配 key 自动降级跳过
+        self._vectors = None
+        embed_cfg = raw.get("embedding", {}) if isinstance(raw.get("embedding", {}), dict) else {}
+        if bool(embed_cfg.get("enabled", False)):
+            api_key = str(embed_cfg.get("api_key") or "") or os.environ.get(
+                str(embed_cfg.get("api_key_env") or ""), ""
+            )
+            if api_key:
+                from screen_agent.dedup.semantic import EmbeddingClient
+                from screen_agent.memory.vector import MemoryVectors
+
+                embedder = EmbeddingClient(
+                    base_url=str(embed_cfg.get("base_url")),
+                    model=str(embed_cfg.get("model", "BAAI/bge-m3")),
+                    api_key=api_key,
+                )
+                self._vectors = MemoryVectors(self.memory.db_path, embedder)
+        self.retriever = HybridRetriever(
+            self.memory,
+            vector_search=(self._vectors.search if self._vectors is not None else None),
+        )
         self.assembler = ContextAssembler(self.memory, self.retriever)
         self.consolidator = Consolidator(self.memory)
         # 工作记忆恢复：接上次未关闭的会话
@@ -379,6 +400,8 @@ class VoiceAssistant:
                     continue
                 events = self.memory.list_events(limit=200)
                 self.consolidator.mine_projects_from_events(events)
+                if self._vectors is not None:
+                    self._vectors.backfill(events, max_new=20)
                 for user_text, reply in self._unconsolidated:
                     self.consolidator.extract_from_turn(
                         user_text, reply, evidence=f"session:{self._session_id}"

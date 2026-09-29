@@ -114,7 +114,7 @@ system prompt = 三段式，总预算默认 1200 token（字符估算）：
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | 分层 schema + 三维检索 + 会话持久化 + 规则固化 v1 + 装配器 + **类型条件衰减 + 溯源 evidence + 睡眠门控固化** | ✅ 本次落地 |
-| P1 | LLM 候选提取 hook（梦境门控内运行）、embedding 向量检索、MemOS 式反思回填调 importance、fact 显式 supersede | 待做 |
+| P1 | embedding 向量检索（SiliconFlow bge-m3 免费通道，idle 期回填向量）✅；LLM 候选提取（梦境门控内运行）、MemOS 式反思回填调 importance、fact 显式 supersede | 进行中 |
 | P2 | 日报反思回路（日报 → 候选事实 → 对账入库）、**梦境重组**（跨域配对找连接）、proactive 触发（记忆驱动的主动提醒 + 前瞻记忆意图表）、时间有效性窗口 | 待做 |
 
 ## 五、面试叙事口径

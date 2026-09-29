@@ -8,11 +8,12 @@ dedup:
   enable_histogram: true
 
 embedding:
+  # 免费方案：硅基流动 BAAI/bge-m3（siliconflow.cn 注册免费）；或本地 vLLM/Ollama 的 OpenAI 兼容端点
   enabled: false
-  base_url: http://127.0.0.1:8000/v1
-  model: text-embedding-3-small
+  base_url: https://api.siliconflow.cn/v1
+  model: BAAI/bge-m3
   api_key: ""
-  api_key_env: EMBEDDING_API_KEY
+  api_key_env: SILICONFLOW_API_KEY
   threshold: 0.92
 
 activity:
