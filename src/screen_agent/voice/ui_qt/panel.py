@@ -24,6 +24,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from screen_agent.voice.ui_qt.messages import MessageView
+
 PANEL_W = 356              # 窗口宽（含投影边距）
 SHADOW_MARGIN = 10
 INPUT_MIN_H = 72
@@ -337,18 +339,8 @@ class ChatPanel(QWidget):
         self._reply_divider.hide()
         root.addWidget(self._reply_divider)
 
-        self._scroll = QScrollArea()
+        self._scroll = MessageView(THEMES.get(theme, THEMES["light"]), on_content_change=self._grow_reply_card)
         self._scroll.setObjectName("ReplyCard")
-        self._scroll.setWidgetResizable(True)
-        inner = QWidget()
-        inner.setObjectName("ReplyInner")
-        inner.setStyleSheet("background: transparent;")
-        self._chat_flow = QVBoxLayout(inner)
-        self._chat_flow.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._chat_flow.setSpacing(6)
-        self._chat_flow.setContentsMargins(7, 7, 7, 7)
-        self._scroll.setWidget(inner)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setFixedHeight(0)
         self._scroll.hide()
         root.addWidget(self._scroll)
@@ -437,7 +429,7 @@ class ChatPanel(QWidget):
 
         self._reply_visible = False
         self._activity_visible = False
-        self._pending_reply: QLabel | None = None
+        self._streaming = False
         self._activity_timer = QTimer(self)
         self._activity_timer.timeout.connect(self._refresh_activity)
         self._activity_timer.start(30000)
@@ -456,14 +448,7 @@ class ChatPanel(QWidget):
                 child.setStyleSheet(f"color: {t['text']}; font-size: 15px; font-weight: 600; background: transparent;")
             else:
                 child.setStyleSheet(f"color: {t['muted']}; font-size: 12px; background: transparent;")
-        inner = self._scroll.widget()
-        if inner is not None:
-            inner.setStyleSheet("background: transparent;")
-        for i in range(self._chat_flow.count()):
-            widget = self._chat_flow.itemAt(i).widget()
-            if isinstance(widget, QLabel):
-                kind = widget.objectName().replace("Bubble", "") or "Bot"
-                widget.setStyleSheet(build_bubble_style(kind, theme))
+        self._scroll.set_palette(t)
         self._on_input_focus(self._input.hasFocus())
 
     # ---- 手绘投影（真实层次，且不糊文字）----
@@ -508,7 +493,7 @@ class ChatPanel(QWidget):
             self._on_height_changed()
 
     def _grow_reply_card(self) -> None:
-        content_h = self._chat_flow.sizeHint().height() + 14
+        content_h = self._scroll.content_height() + 10
         target = max(44, min(REPLY_MAX_H, content_h))
         self._reply_visible = True
         if not self._scroll.isVisible():
@@ -525,111 +510,52 @@ class ChatPanel(QWidget):
         if not text:
             return
         self._greeting.hide()
-        align = (
-            Qt.AlignmentFlag.AlignRight if kind == "User" else Qt.AlignmentFlag.AlignLeft
-        )
-        label = _bubble(text, kind, self._theme)
-        self._chat_flow.addWidget(
-            label, alignment=align | Qt.AlignmentFlag.AlignTop
-        )
-        pad = 8 if kind == "User" else (4 if kind == "Info" else 12)
-        QTimer.singleShot(0, lambda: self._fit_bubble_height(label, text, pad))
-        bar = self._scroll.verticalScrollBar()
-        QTimer.singleShot(30, lambda: bar.setValue(bar.maximum()))
+        self._scroll.add_message(kind, text)
         QTimer.singleShot(0, self._grow_reply_card)
 
     # ---- 流式回话：增量上屏，最后终结；非流式走打字机兜底 ----
 
-    def _fit_bubble_height(self, label: QLabel, plain_text: str, pad: int = 12) -> None:
-        """QLabel 富文本换行高度不自适应（经典坑）：按内容显式计算并锁定高度。"""
-        from PyQt6.QtGui import QFontMetrics
-
-        label.ensurePolished()
-        fm = QFontMetrics(label.font())
-        w = label.width() or label.maximumWidth()
-        br = fm.boundingRect(0, 0, max(60, int(w) - 10), 10000, int(Qt.TextFlag.TextWordWrap), plain_text)
-        label.setFixedHeight(br.height() + pad)
-
-    def _bot_rich_text(self, text: str) -> str:
-        import html
-
-        safe = html.escape(text).replace(chr(10), "<br>")
-        marker = THEMES.get(self._theme, THEMES["light"])["marker"]
-        return f"<span style='color:{marker}'>&#9679;</span>&nbsp;&nbsp;{safe}"
-
     def _on_partial(self, text: str) -> None:
         self._greeting.hide()
-        if self._pending_reply is None:
-            # 占位气泡：正常气泡样式（不斜体），先显示「正在输入…」
-            label = QLabel("")
-            label.setObjectName("BubbleBot")
-            label.setStyleSheet(build_bubble_style("Bot", self._theme))
-            label.setTextFormat(Qt.TextFormat.RichText)
-            label.setWordWrap(True)
-            label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
-            label.setMaximumWidth(PANEL_W - 96)
-            self._chat_flow.addWidget(
-                label, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-            )
-            self._pending_reply = label
-            self._grow_reply_card()
-            muted = THEMES.get(self._theme, THEMES["light"])["muted"]
-            label.setText(f"<span style='color:{muted}'>正在输入…</span>")
+        if not self._scroll.has_messages() or self._scroll._model.data(
+            self._scroll._model.index(self._scroll._model.rowCount() - 1),
+            Qt.ItemDataRole.UserRole,
+        ) != "Bot":
+            # 首个增量：占位「正在输入…」，随后原地生长
+            self._scroll.add_message("Bot", "正在输入…")
+        self._streaming = True
         if not text:
             return
-        self._pending_reply.setText(self._bot_rich_text(text))
-        self._fit_bubble_height(self._pending_reply, text)
-        bar = self._scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        self._scroll.stream_last(text)
+        self._grow_reply_card()
 
     def _on_result_text(self, text: str) -> None:
         if not text:
             return
-        if self._pending_reply is not None:
-            # 流式路径：终结占位气泡
-            self._pending_reply.setTextFormat(Qt.TextFormat.RichText)
-            self._pending_reply.setText(self._bot_rich_text(text))
-            self._fit_bubble_height(self._pending_reply, text)
-            self._pending_reply = None
-            bar = self._scroll.verticalScrollBar()
-            QTimer.singleShot(30, lambda: bar.setValue(bar.maximum()))
+        if self._streaming and self._scroll.has_messages():
+            # 流式路径：原地终结
+            self._scroll.stream_last(text)
+            self._streaming = False
+            self._grow_reply_card()
             return
+        self._streaming = False
         self._typewriter_bubble(text)
 
     def _typewriter_bubble(self, text: str) -> None:
-        """非流式兜底：打字机效果逐字显现，最后补回圆点标记。"""
-        import html
-
-        safe = html.escape(text).replace(chr(10), "<br>")
-        full_html = self._bot_rich_text(text)
-        label = QLabel("")
-        label.setObjectName("BubbleBot")
-        label.setStyleSheet(build_bubble_style("Bot", self._theme))
-        label.setTextFormat(Qt.TextFormat.RichText)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
-        label.setMaximumWidth(PANEL_W - 96)
-        self._chat_flow.addWidget(
-            label, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
+        """非流式兜底：打字机效果逐字显现（模型驱动，delegate 负责样式）。"""
+        self._scroll.add_message("Bot", "")
         self._grow_reply_card()
-        bar = self._scroll.verticalScrollBar()
         state = {"i": 0}
-        step = max(3, len(safe) // 140)
+        step = max(3, len(text) // 140)
 
         def tick() -> None:
             state["i"] += step
-            i = min(state["i"], len(safe))
-            plain_slice = safe[:i]
-            label.setText(plain_slice)
-            self._fit_bubble_height(label, plain_slice)
-            bar.setValue(bar.maximum())
-            if i >= len(safe):
+            i = min(state["i"], len(text))
+            self._scroll.stream_last(text[:i])
+            if i >= len(text):
                 timer.stop()
                 timer.deleteLater()
-                label.setText(full_html)
-                self._fit_bubble_height(label, text)
+                self._scroll.stream_last(text)
 
         timer = QTimer(self)
         timer.timeout.connect(tick)
@@ -675,12 +601,8 @@ class ChatPanel(QWidget):
         self._input.setFocus()
 
     def clear_history(self) -> None:
-        self._pending_reply = None
-        while self._chat_flow.count():
-            item = self._chat_flow.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        self._streaming = False
+        self._scroll.clear_messages()
         self._scroll.hide()
         self._scroll.setFixedHeight(0)
         self._reply_divider.hide()
