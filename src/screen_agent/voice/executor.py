@@ -32,8 +32,12 @@ class CommandExecutor:
         screen_context_fn: Callable[[], str] | None = None,
         memory_context_fn: Callable[[str], str] | None = None,
         on_chat_delta: Callable[[str], None] | None = None,
+        vision_cfg: dict | None = None,
+        gui_max_steps: int = 5,
     ) -> None:
         self.pipeline = pipeline
+        self._vision_cfg = vision_cfg or {}
+        self._gui_max_steps = gui_max_steps
         self.web_url = web_url
         self.chat_client = chat_client or DisabledChatClient()
         self.chat_history = chat_history if chat_history is not None else []
@@ -54,6 +58,7 @@ class CommandExecutor:
             IntentType.STATS: self._stats,
             IntentType.OPEN_WEB_UI: self._open_web_ui,
             IntentType.END_SESSION: self._end_session,
+            IntentType.GUI_TASK: self._gui_task,
             IntentType.CHAT: self._chat,
         }
         handler = handlers.get(intent.type)
@@ -122,6 +127,31 @@ class CommandExecutor:
         url = intent.target
         webbrowser.open(url)
         return ActionResult(success=True, message=f"已打开网页", detail={"url": url})
+
+    def _gui_task(self, intent: Intent) -> ActionResult:
+        import os
+
+        from screen_agent.tools.gui_agent import GuiAgent
+        from screen_agent.tools.registry_setup import build_default_registry
+
+        cfg = self._vision_cfg or {}
+        base_url = str(cfg.get("base_url") or "https://api.siliconflow.cn/v1")
+        model = str(cfg.get("model") or "Qwen/Qwen2.5-VL-32B-Instruct")
+        api_key = str(cfg.get("api_key") or "") or os.environ.get(
+            str(cfg.get("api_key_env") or "SILICONFLOW_API_KEY"), ""
+        )
+        if not api_key:
+            return ActionResult(
+                success=False,
+                message="GUI 操控需要视觉模型。配好 vlm 或 SILICONFLOW_API_KEY 再试",
+            )
+        agent = GuiAgent(
+            build_default_registry(),
+            base_url=base_url, model=model, api_key=api_key,
+            max_steps=self._gui_max_steps,
+        )
+        instruction = intent.raw_command or intent.target
+        return agent.run(instruction)
 
     @staticmethod
     def _resolve_app(target: str) -> str | None:

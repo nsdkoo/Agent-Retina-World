@@ -15,6 +15,7 @@ class IntentType(str, Enum):
     STATS = "stats"
     OPEN_WEB_UI = "open_web_ui"
     END_SESSION = "end_session"
+    GUI_TASK = "gui_task"
     CHAT = "chat"
     UNKNOWN = "unknown"
 
@@ -78,6 +79,10 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
         if "." in target and " " not in target:
             return Intent(IntentType.OPEN_URL, target=f"https://{target}", raw_command=text)
         return Intent(IntentType.OPEN_APP, target=target, raw_command=text)
+
+    gui_m = re.search(r"帮我(?:点|点击|输入|按|选)\s*(.+)", text)
+    if gui_m:
+        return Intent(IntentType.GUI_TASK, target=gui_m.group(1).strip(), raw_command=text)
 
     help_m = re.search(r"帮(?:我|忙)?(.+)", text)
     if help_m:
