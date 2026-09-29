@@ -23,7 +23,6 @@ from PyQt6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
-    QRadialGradient,
 )
 from PyQt6.QtWidgets import QWidget
 
@@ -35,16 +34,13 @@ logger = logging.getLogger(__name__)
 BALL_SIZE = 36
 DOT_RADIUS = 13.0
 
-# Apple Intelligence 流光配色（固定顺序，勿打乱）
-AURORA = ["#0894FF", "#C959DD", "#FF2E54", "#FF9004"]
-
-# 状态 → (转速 deg/s, 强度 0-1, 呼吸幅度)
+# 状态 → 呼吸幅度（唯一动效：中心点/圆盘透明度轻呼吸）
 STATE_TUNING = {
-    "idle": (40, 0.40, 0.15),
-    "listening": (130, 1.00, 0.10),
-    "processing": (220, 0.85, 0.05),
-    "speaking": (130, 0.95, 0.20),
-    "session": (130, 1.00, 0.10),
+    "idle": (0.15,),
+    "listening": (0.10,),
+    "processing": (0.05,),
+    "speaking": (0.20,),
+    "session": (0.10,),
 }
 
 # 状态主色（描边 / 流光环用）
@@ -55,16 +51,6 @@ STATE_ACCENTS = {
     "speaking": "#d97706",
     "session": "#6aa87f",
 }
-
-
-def _aurora_gradient(cx: float, cy: float, angle: float):  # noqa: ANN201 - 保留给后续视觉扩展
-    from PyQt6.QtGui import QConicalGradient
-
-    grad = QConicalGradient(cx, cy, angle)
-    for i, hex_color in enumerate(AURORA):
-        grad.setColorAt(i / len(AURORA), QColor(hex_color))
-    grad.setColorAt(1.0, QColor(AURORA[0]))
-    return grad
 
 
 class BallWidget(QWidget):
@@ -84,7 +70,6 @@ class BallWidget(QWidget):
         self._level_fn = level_fn
 
         self._status = "idle"
-        self._angle = 0.0
         self._last_tick = time.monotonic()
         self._level = 0.0
         self._hover = 0.0
@@ -113,8 +98,7 @@ class BallWidget(QWidget):
         now = time.monotonic()
         dt = min(0.1, now - self._last_tick)
         self._last_tick = now
-        speed, _intensity, breathe = STATE_TUNING.get(self._status, STATE_TUNING["idle"])
-        self._angle = (self._angle + speed * dt) % 360.0
+        (breathe,) = STATE_TUNING.get(self._status, STATE_TUNING["idle"])
         if self._level_fn is not None:
             try:
                 raw = max(0.0, min(1.0, float(self._level_fn())))
@@ -132,89 +116,45 @@ class BallWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        _speed, intensity, _breathe = STATE_TUNING.get(self._status, STATE_TUNING["idle"])
+        (breathe,) = STATE_TUNING.get(self._status, STATE_TUNING["idle"])
         active = self._status in ("listening", "processing", "speaking", "session")
-        level = self._level if active else 0.0
         accent = QColor(STATE_ACCENTS.get(self._status, STATE_ACCENTS["idle"]))
         hover = self._hover
-        now = time.monotonic()
+        # 轻度呼吸：仅作用于中心点透明度（幅度 ≤15%）
+        pulse = breathe * (0.5 + 0.5 * math.sin(time.monotonic() * 2 * math.pi / 2.4))
 
         cx = cy = BALL_SIZE / 2
         radius = DOT_RADIUS + hover * 0.8
-        # 安静：静止时半透明，悬停/活动时提亮（始终保留通透感）
-        base_alpha = 0.52 + hover * 0.34 + (0.24 if active else 0.0)
 
-        # 0. 柔和投影（暖色暗部，与蜂蜜金棕面板同系）
+        # 柔和投影（浮起来，不重）
         for i in range(4):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(58, 48, 32, int((7 + i * 4) * min(1.0, base_alpha))))
+            painter.setBrush(QColor(58, 48, 32, int((6 + i * 4) * (0.6 + hover * 0.3))))
             spread = 4 - i
             painter.drawEllipse(QPointF(cx, cy + 2.0), radius + spread, radius + spread)
 
-        # 1. 本体：燕麦白磨砂圆（暖色系，无金属蓝灰）
-        grad = QRadialGradient(cx - radius * 0.35, cy - radius * 0.45, radius * 2.0)
-        grad.setColorAt(0.0, QColor(255, 253, 247, int(238 * min(1.0, base_alpha))))
-        if active:
-            tint = QColor(accent)
-            tint.setAlpha(int(52 * min(1.0, base_alpha)))
-            grad.setColorAt(0.5, tint)
-            grad.setColorAt(0.85, QColor(240, 226, 200, int(190 * min(1.0, base_alpha))))
-        else:
-            grad.setColorAt(0.5, QColor(250, 248, 240, int(206 * min(1.0, base_alpha))))
-            grad.setColorAt(0.85, QColor(236, 231, 218, int(190 * min(1.0, base_alpha))))
-        grad.setColorAt(1.0, QColor(214, 206, 188, int(170 * min(1.0, base_alpha))))
+        # 扁平圆盘：纯色填充 + 1px 描边（无渐变无高光）
+        disc_alpha = 235 + int(hover * 15)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(grad)
+        painter.setBrush(QColor(250, 248, 242, min(255, disc_alpha)))
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
-
-        # 2. 边缘：暖棕细描边 + 内侧一圈极淡反光
-        edge = QColor(96, 82, 58, int(78 + 46 * min(1.0, base_alpha)))
-        painter.setPen(QPen(edge, 1.0))
+        painter.setPen(QPen(QColor(150, 138, 112, 200), 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
-        inner_hi = QColor(255, 252, 244, int(70 * min(1.0, base_alpha)))
-        painter.setPen(QPen(inner_hi, 1.0))
-        painter.drawEllipse(QPointF(cx, cy), radius - 1.4, radius - 1.4)
 
-        # 空闲：中心一颗小点，表明"我在"，但不抢眼
+        # 中心状态点：唯一的状态表达（颜色 + 轻呼吸透明度）
+        base_alpha = 150 + int(70 * (1.0 - pulse))
         if not active:
             core = QColor(STATE_ACCENTS["idle"])
-            core.setAlpha(int(120 + 80 * min(1.0, base_alpha)))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(core)
-            painter.drawEllipse(QPointF(cx, cy), 2.9 + hover * 0.8, 2.9 + hover * 0.8)
-
-        # 2. 状态表达：一圈极细流光
-        if self._status in ("listening", "session"):
-            ring = QColor(accent)
-            ring.setAlpha(int(90 + 110 * min(1.0, level * 2)))
-            painter.setPen(QPen(ring, 1.3))
-            rr = radius + 2.8 + self._breathe_phase * 1.4 + level * 3.2
-            painter.drawEllipse(QPointF(cx, cy), rr, rr)
-        elif self._status == "processing":
-            # 处理中：细环 + 单颗轨道点（比旋转弧干净）
-            import math as _math
-
-            ring = QColor(accent)
-            ring.setAlpha(64)
-            painter.setPen(QPen(ring, 1.2))
-            rr = radius + 3.0
-            painter.drawEllipse(QPointF(cx, cy), rr, rr)
-            ang = _math.radians((self._angle * 3) % 360)
-            pos = QPointF(cx + rr * _math.cos(ang), cy + rr * _math.sin(ang))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(accent))
-            painter.drawEllipse(pos, 2.6, 2.6)
-        elif self._status == "speaking":
-            for i in range(2):
-                phase = (now * 1.05 + i * 0.5) % 1.0
-                ripple = QColor(accent)
-                ripple.setAlpha(int((1.0 - phase) * 80))
-                painter.setPen(QPen(ripple, 1.3))
-                rr = radius + 2.6 + phase * 6.5
-                painter.drawEllipse(QPointF(cx, cy), rr, rr)
+        else:
+            core = QColor(accent)
+        core.setAlpha(min(255, base_alpha))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(core)
+        painter.drawEllipse(QPointF(cx, cy), 3.2, 3.2)
 
         painter.end()
+
 
     # ---- 交互：拖动 vs 单击 ----
 
@@ -577,10 +517,12 @@ class QtFloatingBall:
                 if result is not None:
                     self.assistant.emit_result(result.message)
                     self.assistant.speak(result.message)
-                self.assistant.set_status("session" if self.assistant.in_session else "idle")
             except Exception:
                 import logging
 
                 logging.getLogger(__name__).exception("文字指令执行失败")
+            finally:
+                # 异常路径兜底：状态复位，避免球永久卡在 processing
+                self.assistant.set_status("session" if self.assistant.in_session else "idle")
 
         threading.Thread(target=job, daemon=True).start()
