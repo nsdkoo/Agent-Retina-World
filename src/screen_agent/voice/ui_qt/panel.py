@@ -501,14 +501,27 @@ class ChatPanel(QWidget):
         align = (
             Qt.AlignmentFlag.AlignRight if kind == "User" else Qt.AlignmentFlag.AlignLeft
         )
+        label = _bubble(text, kind, self._theme)
         self._chat_flow.addWidget(
-            _bubble(text, kind, self._theme), alignment=align | Qt.AlignmentFlag.AlignTop
+            label, alignment=align | Qt.AlignmentFlag.AlignTop
         )
+        pad = 8 if kind == "User" else (4 if kind == "Info" else 12)
+        QTimer.singleShot(0, lambda: self._fit_bubble_height(label, text, pad))
         bar = self._scroll.verticalScrollBar()
         QTimer.singleShot(30, lambda: bar.setValue(bar.maximum()))
         QTimer.singleShot(0, self._grow_reply_card)
 
     # ---- 流式回话：增量上屏，最后终结；非流式走打字机兜底 ----
+
+    def _fit_bubble_height(self, label: QLabel, plain_text: str, pad: int = 12) -> None:
+        """QLabel 富文本换行高度不自适应（经典坑）：按内容显式计算并锁定高度。"""
+        from PyQt6.QtGui import QFontMetrics
+
+        label.ensurePolished()
+        fm = QFontMetrics(label.font())
+        w = label.width() or label.maximumWidth()
+        br = fm.boundingRect(0, 0, max(60, int(w) - 10), 10000, int(Qt.TextFlag.TextWordWrap), plain_text)
+        label.setFixedHeight(br.height() + pad)
 
     def _bot_rich_text(self, text: str) -> str:
         import html
@@ -537,6 +550,7 @@ class ChatPanel(QWidget):
         if not text:
             return
         self._pending_reply.setText(self._bot_rich_text(text))
+        self._fit_bubble_height(self._pending_reply, text)
         bar = self._scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
 
@@ -547,6 +561,7 @@ class ChatPanel(QWidget):
             # 流式路径：终结占位气泡
             self._pending_reply.setTextFormat(Qt.TextFormat.RichText)
             self._pending_reply.setText(self._bot_rich_text(text))
+            self._fit_bubble_height(self._pending_reply, text)
             self._pending_reply = None
             bar = self._scroll.verticalScrollBar()
             QTimer.singleShot(30, lambda: bar.setValue(bar.maximum()))
@@ -578,12 +593,15 @@ class ChatPanel(QWidget):
         def tick() -> None:
             state["i"] += step
             i = min(state["i"], len(safe))
-            label.setText(safe[:i])
+            plain_slice = safe[:i]
+            label.setText(plain_slice)
+            self._fit_bubble_height(label, plain_slice)
             bar.setValue(bar.maximum())
             if i >= len(safe):
                 timer.stop()
                 timer.deleteLater()
                 label.setText(full_html)
+                self._fit_bubble_height(label, text)
 
         timer = QTimer(self)
         timer.timeout.connect(tick)
