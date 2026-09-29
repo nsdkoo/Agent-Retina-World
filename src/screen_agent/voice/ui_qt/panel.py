@@ -28,7 +28,7 @@ from screen_agent.voice.ui_qt.messages import MessageView
 
 PANEL_W = 356              # 窗口宽（含投影边距）
 SHADOW_MARGIN = 10
-INPUT_MIN_H = 72
+INPUT_MIN_H = 60
 INPUT_MAX_H = 140          # 约 6 行，备忘录式
 REPLY_MAX_H = 420          # 回复区限高（桌面聊天窗惯例：约六成视口高）
 LONG_TEXT_THRESHOLD = 400  # 超过这么多字折叠成 chip
