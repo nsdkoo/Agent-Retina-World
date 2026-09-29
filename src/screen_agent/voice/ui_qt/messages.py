@@ -19,6 +19,9 @@ KIND_USER = "User"
 KIND_BOT = "Bot"
 KIND_INFO = "Info"
 
+REVEAL_ROLE = int(Qt.ItemDataRole.UserRole) + 1  # 流式出字位置（None=非流式）
+_FADE_TAIL = 6                                    # 尾部渐入字符数
+
 _PAD_V = 4
 _PAD_H = 2
 
@@ -45,19 +48,22 @@ class MessageModel(QAbstractListModel):
             return item["text"]
         if role == Qt.ItemDataRole.UserRole:
             return item["kind"]
+        if role == REVEAL_ROLE:
+            return item.get("reveal")
         return None
 
-    def add_message(self, kind: str, text: str) -> None:
+    def add_message(self, kind: str, text: str, reveal: int | None = None) -> None:
         row = len(self._items)
         self.beginInsertRows(QModelIndex(), row, row)
-        self._items.append({"kind": kind, "text": text})
+        self._items.append({"kind": kind, "text": text, "reveal": reveal})
         self.endInsertRows()
 
-    def set_last_text(self, text: str) -> None:
-        """流式/打字机：原地更新最后一条（Bot）。"""
+    def set_last_text(self, text: str, reveal: int | None = None) -> None:
+        """流式/打字机：原地更新最后一条（Bot），reveal=出字位置供尾部渐入。"""
         if not self._items:
             return
         self._items[-1]["text"] = text
+        self._items[-1]["reveal"] = reveal
         idx = self.index(len(self._items) - 1)
         self.dataChanged.emit(idx, idx)
 
@@ -77,7 +83,7 @@ class MessageDelegate(QStyledItemDelegate):
     def set_palette(self, t: dict) -> None:
         self._t = t
 
-    def _doc(self, kind: str, text: str, width: float) -> QTextDocument:
+    def _doc(self, kind: str, text: str, width: float, reveal_pos: int | None = None) -> QTextDocument:
         t = self._t
         doc = QTextDocument()
         doc.setDocumentMargin(0)
@@ -94,25 +100,56 @@ class MessageDelegate(QStyledItemDelegate):
                 f"<span style='font-size:11px;color:{t['muted']};'>{_escape(text)}</span>"
             )
         else:
+            body_html = _escape(text)
+            # 流式尾部渐入：最新 6 字颜色从背景色渐变到正文色（Smooth Reveal 的 fade-in tail）
+            if reveal_pos is not None and 0 <= reveal_pos < len(text):
+                body_html = self._fade_tail_html(text, reveal_pos)
             doc.setHtml(
                 f"<span style='color:{t['marker']};font-size:9px;'>&#9679;</span>&nbsp;&nbsp;"
-                f"<span style='font-size:12px;color:{t['text']};'>{_escape(text)}</span>"
+                f"<span style='font-size:12px;color:{t['text']};'>{body_html}</span>"
             )
         doc.setTextWidth(max(60.0, width))
         return doc
 
+    def _fade_tail_html(self, text: str, reveal_pos: int) -> str:
+        """尾部渐入：最新字符最接近背景色（最淡），向前逐字加深到正文色。"""
+        import html as _html
+
+        t = self._t
+        bg = QColor(t.get("reply_bg", t.get("panel_bottom", "#f4f2ea")))
+        fg = QColor(t["text"])
+
+        def blend(ratio: float) -> str:
+            r = int(bg.red() + (fg.red() - bg.red()) * ratio)
+            g = int(bg.green() + (fg.green() - bg.green()) * ratio)
+            b = int(bg.blue() + (fg.blue() - bg.blue()) * ratio)
+            return f"#{r:02x}{g:02x}{b:02x}"
+
+        tail_start = max(0, reveal_pos - _FADE_TAIL)
+        head = _escape(text[:tail_start])
+        tail_html = ""
+        for offset in range(reveal_pos - tail_start):
+            ch = text[tail_start + offset]
+            # offset=0 是渐入区最老的字（最实），最新字最淡
+            ratio = 0.12 + 0.88 * ((offset + 1) / _FADE_TAIL)
+            tail_html += f"<span style='color:{blend(min(1.0, ratio))};'>{_escape(ch)}</span>"
+        return head + tail_html
+
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:  # noqa: N802
         kind = index.data(Qt.ItemDataRole.UserRole) or KIND_BOT
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        reveal = index.data(REVEAL_ROLE)
         width = max(80.0, float(option.rect.width()) - _PAD_H * 2) if option.rect.width() > 0 else 260.0
         if kind == KIND_USER:
             width = max(80.0, width - 72)  # 右侧内缩块：竖线 + 文字
-        doc = self._doc(kind, text, width)
+        doc = self._doc(kind, text, width, reveal if isinstance(reveal, int) else None)
         return QSize(int(option.rect.width() if option.rect.width() > 0 else width), int(doc.size().height()) + _PAD_V * 2)
 
     def paint(self, painter, option, index) -> None:  # noqa: ANN001
         kind = index.data(Qt.ItemDataRole.UserRole) or KIND_BOT
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        reveal = index.data(REVEAL_ROLE)
+        reveal_pos = reveal if isinstance(reveal, int) else None
         rect = option.rect
         width = max(80.0, float(rect.width()) - _PAD_H * 2)
         line_x = None
@@ -120,7 +157,7 @@ class MessageDelegate(QStyledItemDelegate):
             # 右侧内缩块：文字靠右 + 金棕竖线，与助手消息明确区分
             width = max(80.0, width - 72)
             line_x = rect.right() - 10
-        doc = self._doc(kind, text, width)
+        doc = self._doc(kind, text, width, reveal_pos)
         h = doc.size().height()
 
         painter.save()
@@ -169,14 +206,14 @@ class MessageView(QListView):
         self._delegate.set_palette(t)
         self._model.layoutChanged.emit()
 
-    def add_message(self, kind: str, text: str) -> None:
-        self._model.add_message(kind, text)
+    def add_message(self, kind: str, text: str, reveal: int | None = None) -> None:
+        self._model.add_message(kind, text, reveal)
         self.scrollToBottom()
         if self._on_content_change:
             self._on_content_change()
 
-    def stream_last(self, text: str) -> None:
-        self._model.set_last_text(text)
+    def stream_last(self, text: str, reveal: int | None = None) -> None:
+        self._model.set_last_text(text, reveal)
         self.scrollToBottom()
         if self._on_content_change:
             self._on_content_change()

@@ -438,6 +438,10 @@ class ChatPanel(QWidget):
         self._reply_visible = False
         self._activity_visible = False
         self._streaming = False
+        self._reveal_buffer = ""
+        self._reveal_shown = 0.0
+        self._reveal_timer = QTimer(self)
+        self._reveal_timer.timeout.connect(self._reveal_tick)
         self._activity_timer = QTimer(self)
         self._activity_timer.timeout.connect(self._refresh_activity)
         self._activity_timer.start(30000)
@@ -526,53 +530,64 @@ class ChatPanel(QWidget):
         self._scroll.add_message(kind, text)
         QTimer.singleShot(0, self._grow_reply_card)
 
-    # ---- 流式回话：增量上屏，最后终结；非流式走打字机兜底 ----
+    # ---- 流式出字：缓冲 + 自适应速率 + 尾部渐入（ChatGPT 式 smooth reveal）----
+
+    def _ensure_stream_row(self) -> None:
+        self._greeting.hide()
+        last_kind = None
+        if self._scroll.has_messages():
+            last_kind = self._scroll._model.data(
+                self._scroll._model.index(self._scroll._model.rowCount() - 1),
+                Qt.ItemDataRole.UserRole,
+            )
+        if last_kind != "Bot":
+            self._scroll.add_message("Bot", "", reveal=0)
+            self._grow_reply_card()
 
     def _on_partial(self, text: str) -> None:
-        self._greeting.hide()
-        if not self._scroll.has_messages() or self._scroll._model.data(
-            self._scroll._model.index(self._scroll._model.rowCount() - 1),
-            Qt.ItemDataRole.UserRole,
-        ) != "Bot":
-            # 首个增量：占位「正在输入…」，随后原地生长
-            self._scroll.add_message("Bot", "正在输入…")
+        self._ensure_stream_row()
         self._streaming = True
         if not text:
             return
-        self._scroll.stream_last(text)
+        # 增量进缓冲，出字速率由 _reveal_tick 自适应（网络块大小不均也不卡）
+        self._reveal_buffer = text
+        self._reveal_timer.start(16)
         self._grow_reply_card()
 
     def _on_result_text(self, text: str) -> None:
         if not text:
             return
         if self._streaming and self._scroll.has_messages():
-            # 流式路径：原地终结
-            self._scroll.stream_last(text)
+            # 流式路径：终稿进缓冲，出字继续追平（自然收尾）
+            self._reveal_buffer = text
             self._streaming = False
-            self._grow_reply_card()
+            self._reveal_timer.start(16)
             return
         self._streaming = False
-        self._typewriter_bubble(text)
+        # 非流式兜底：整段从零平滑渐入（取代均匀打字机）
+        self._ensure_stream_row()
+        self._reveal_buffer = text
+        self._reveal_shown = 0.0
+        self._reveal_timer.start(16)
 
-    def _typewriter_bubble(self, text: str) -> None:
-        """非流式兜底：打字机效果逐字显现（模型驱动，delegate 负责样式）。"""
-        self._scroll.add_message("Bot", "")
+    def _reveal_tick(self) -> None:
+        remaining = len(self._reveal_buffer) - int(self._reveal_shown)
+        if remaining <= 0:
+            if self._streaming:
+                # 已追平但流未结束：停在当前位置等更多增量（尾部保持渐入态）
+                self._scroll.stream_last(
+                    self._reveal_buffer, reveal=int(self._reveal_shown)
+                )
+            else:
+                # 终稿追平：定格为实色
+                self._scroll.stream_last(self._reveal_buffer, reveal=None)
+                self._reveal_timer.stop()
+            return
+        # 指数追赶：剩余越多出得越快（大块不卡顿、尾字渐入）
+        self._reveal_shown += max(1.0, remaining * 0.16)
+        shown = min(int(self._reveal_shown), len(self._reveal_buffer))
+        self._scroll.stream_last(self._reveal_buffer[:shown], reveal=shown)
         self._grow_reply_card()
-        state = {"i": 0}
-        step = max(3, len(text) // 140)
-
-        def tick() -> None:
-            state["i"] += step
-            i = min(state["i"], len(text))
-            self._scroll.stream_last(text[:i])
-            if i >= len(text):
-                timer.stop()
-                timer.deleteLater()
-                self._scroll.stream_last(text)
-
-        timer = QTimer(self)
-        timer.timeout.connect(tick)
-        timer.start(16)
 
     def add_info(self, text: str) -> None:
         self.add_bubble(text, "Info")
@@ -615,6 +630,9 @@ class ChatPanel(QWidget):
 
     def clear_history(self) -> None:
         self._streaming = False
+        self._reveal_buffer = ""
+        self._reveal_shown = 0.0
+        self._reveal_timer.stop()
         self._scroll.clear_messages()
         self._scroll.hide()
         self._scroll.setFixedHeight(0)
