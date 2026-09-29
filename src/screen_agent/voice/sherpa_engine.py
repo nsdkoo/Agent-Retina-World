@@ -55,14 +55,33 @@ class SherpaAsr:
             num_threads=num_threads,
             sample_rate=SAMPLE_RATE,
             feature_dim=80,
-            decoding_method="greedy_search",
             enable_endpoint_detection=True,
             rule1_min_trailing_silence=1.2,
             rule2_min_trailing_silence=0.8,
             rule3_min_utterance_length=20,
-            **({"hotwords_file": str(hotwords_file), "hotwords_score": 1.5}
-               if hotwords_file and hotwords_file.exists() else {}),
         )
+        # 热词需 modified_beam_search 解码（greedy 不支持）；构造失败自动去热词重试
+        if hotwords_file and hotwords_file.exists():
+            try:
+                self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+                    tokens=str(tokens),
+                    encoder=str(encoder),
+                    decoder=str(decoder),
+                    joiner=str(joiner),
+                    num_threads=num_threads,
+                    sample_rate=SAMPLE_RATE,
+                    feature_dim=80,
+                    decoding_method="modified_beam_search",
+                    enable_endpoint_detection=True,
+                    rule1_min_trailing_silence=1.2,
+                    rule2_min_trailing_silence=0.8,
+                    rule3_min_utterance_length=20,
+                    hotwords_file=str(hotwords_file),
+                    hotwords_score=1.5,
+                )
+                logger.info("热词已启用: %s", hotwords_file.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("热词不可用（%s），回退 greedy_search", exc)
 
     def create_stream(self):
         return self.recognizer.create_stream()

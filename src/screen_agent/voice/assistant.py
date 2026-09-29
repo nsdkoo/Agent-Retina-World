@@ -55,6 +55,12 @@ class VoiceAssistant:
         asr_dir = models_root / sherpa_cfg.get(
             "asr_model_dir", "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
         )
+        if not asr_dir.is_dir():
+            # 新模型未就绪时降级到旧模型，保证助手可用
+            for cand in models_root.glob("sherpa-onnx-streaming-*"):
+                if cand.is_dir() and (cand / "tokens.txt").exists():
+                    asr_dir = cand
+                    break
         kws_dir = models_root / sherpa_cfg.get(
             "kws_model_dir", "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
         )
