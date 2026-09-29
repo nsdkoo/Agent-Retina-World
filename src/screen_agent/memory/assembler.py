@@ -47,6 +47,15 @@ class ContextAssembler:
             ]
             sections.append(("用户记忆", "\n".join(fact_lines)))
 
+        # 前瞻记忆：未完成的意图提醒模型（Typed Intention Store）
+        try:
+            pending = self.store.list_intentions(status="pending", limit=5)
+        except Exception:
+            pending = []
+        if pending:
+            lines = [f"- {it['content']}" + (f"（应于 {it['due_at'][:16]}）" if it["due_at"] else "") for it in pending]
+            sections.append(("用户交代的待办/意图", "\n".join(lines)))
+
         episodes = self.retriever.retrieve(query=user_text, top_k=self.max_episodes)
         # 反思回填轨迹：实际进入上下文的 episodes（MemOS 式 importance 提权依据）
         self.last_used_event_ids = [s.event.event_id for s in episodes if s.event.event_id]

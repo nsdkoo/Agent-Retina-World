@@ -234,6 +234,8 @@ embedding:
 - [x] LLM 自由对话（多后端：本地 vLLM 千问 / DeepSeek API）
 - [x] v0.7 流式离线语音 + KWS 唤醒 + vits TTS + Qt 悬浮球
 - [x] v0.8 三层记忆系统（分层 + 三维检索 + 对账 + 睡眠门控固化）
+- [x] P1 向量检索（硅基流动 bge-m3 免费）+ 梦境期 LLM 提取 + supersede 对账 + 反思回填
+- [x] P2 前瞻记忆（到点主动提醒）+ 梦境重组（跨域找连接）+ 记忆评测基准（benchmarks/memory_eval.py 7 场景）
 - [ ] 跨会话任务归并与证据追溯
 
 ## License

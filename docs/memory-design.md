@@ -115,7 +115,8 @@ system prompt = 三段式，总预算默认 1200 token（字符估算）：
 |---|---|---|
 | P0 | 分层 schema + 三维检索 + 会话持久化 + 规则固化 v1 + 装配器 + **类型条件衰减 + 溯源 evidence + 睡眠门控固化** | ✅ 本次落地 |
 | P1 | embedding 向量检索 ✅（SiliconFlow bge-m3 免费通道）；LLM 梦境期候选提取 ✅；fact 显式 supersede ✅（放弃/换用 → 旧偏好降级 0.15）；MemOS 式反思回填 importance ✅（被引用 episode 提权封顶 3） | ✅ 完成 |
-| P2 | **梦境重组**（跨域配对找连接，arXiv 2607.16256）、日报反思回路强化、proactive 触发（记忆驱动的主动提醒 + 前瞻记忆意图表）、时间有效性窗口（valid_at/invalid_at） | 待做 |
+| P2 | **梦境重组** ✅（dream_recombine：跨类别抽样 + LLM 找连接，洞察入 entity 低置信）；**前瞻记忆** ✅（intentions 表 + 到点主动提醒 + 装配器注入待办）；**记忆评测基准** ✅（benchmarks/memory_eval.py，7 场景 11 检查） | ✅ 完成 |
+| P3 | 时间有效性窗口（valid_at/invalid_at 显式建模）、日报反思回路强化、多用户隔离 | 待做 |
 
 ## 五、面试叙事口径
 

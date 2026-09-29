@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -275,6 +276,9 @@ class VoiceAssistant:
                     command, result.message,
                     evidence=f"session:{self._session_id}",
                 )
+                # 前瞻记忆：「提醒我明天X」→ intentions 表
+                for content, due_at in self.consolidator.extract_intentions(command):
+                    self.memory.add_intention(content, due_at)
                 self.memory.append_turn(self._session_id, "user", command)
                 self.memory.append_turn(self._session_id, "assistant", result.message)
                 self._unconsolidated.append((command, result.message))
@@ -409,6 +413,25 @@ class VoiceAssistant:
                 self.consolidator.mine_projects_from_events(events)
                 if self._vectors is not None:
                     self._vectors.backfill(events, max_new=20)
+                # 前瞻记忆到点主动提醒（proactive trigger）
+                for it in self.memory.due_intentions():
+                    self.emit_result(f"⏰ 到点了：{it['content']}")
+                    self.memory.complete_intention(it["intention_id"])
+                # 梦境重组：跨域配对找连接（五成概率限流，避免每轮都打扰）
+                chat_client = getattr(self.executor, "chat_client", None)
+                if (
+                    self.chat_enabled
+                    and chat_client is not None
+                    and not isinstance(chat_client, DisabledChatClient)
+                    and random.random() < 0.5
+                ):
+                    insight = self.consolidator.dream_recombine(
+                        lambda prompt: chat_client.complete(
+                            [{"role": "user", "content": prompt}]
+                        )
+                    )
+                    if insight:
+                        self.emit_result(f"💡 顺着记忆想到一件事：{insight}")
                 for user_text, reply in self._unconsolidated:
                     self.consolidator.extract_from_turn(
                         user_text, reply, evidence=f"session:{self._session_id}"

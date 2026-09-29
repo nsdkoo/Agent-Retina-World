@@ -133,6 +133,14 @@ class MemoryStoreV2:
                     content TEXT NOT NULL,
                     PRIMARY KEY (session_id, idx)
                 );
+                CREATE TABLE IF NOT EXISTS intentions (
+                    intention_id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    due_at TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
                 """
             )
             cols = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
@@ -370,3 +378,47 @@ class MemoryStoreV2:
                 (session_id, limit),
             ).fetchall()
         return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
+
+    # ---- 前瞻记忆（Typed Intention Store，2026-09 思路）----
+
+    def add_intention(self, content: str, due_at: datetime | None = None) -> str:
+        intention_id = f"i-{uuid.uuid4().hex[:12]}"
+        with _db_connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO intentions (intention_id, content, due_at, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+                (intention_id, content, due_at.isoformat() if due_at else None, datetime.now().isoformat()),
+            )
+        return intention_id
+
+    def list_intentions(self, status: str = "pending", limit: int = 20) -> list[dict]:
+        with _db_connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT intention_id, content, due_at, status, created_at FROM intentions WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        return [
+            {
+                "intention_id": r[0],
+                "content": r[1],
+                "due_at": r[2],
+                "status": r[3],
+                "created_at": r[4],
+            }
+            for r in rows
+        ]
+
+    def due_intentions(self, now: datetime | None = None) -> list[dict]:
+        """到点的前瞻记忆：due_at 非空且已过期（now 之后不再含未来意图）。"""
+        now = now or datetime.now()
+        return [
+            it
+            for it in self.list_intentions(status="pending", limit=50)
+            if it["due_at"] and datetime.fromisoformat(it["due_at"]) <= now
+        ]
+
+    def complete_intention(self, intention_id: str) -> None:
+        with _db_connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE intentions SET status = 'done', completed_at = ? WHERE intention_id = ?",
+                (datetime.now().isoformat(), intention_id),
+            )

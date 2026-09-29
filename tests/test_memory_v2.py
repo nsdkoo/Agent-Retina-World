@@ -285,3 +285,59 @@ class SupersedeTests(unittest.TestCase):
         new_val = self.store.bump_event_importance(e.event_id)
         self.assertEqual(new_val, 3)  # 封顶
         self.assertEqual(self.store.bump_event_importance("act-99999"), 0)  # 不存在
+
+
+class ProspectiveAndDreamTests(unittest.TestCase):
+    """前瞻记忆（intentions）+ 梦境重组（cross-domain recombination）。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = MemoryStoreV2(Path(self.tmp.name) / "events.db")
+        self.consolidator = Consolidator(self.store)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_intention_extraction_with_due(self) -> None:
+        got = self.consolidator.extract_intentions("提醒我明天交周报")
+        self.assertEqual(len(got), 1)
+        content, due_at = got[0]
+        self.assertEqual(content, "交周报")
+        self.assertIsNotNone(due_at)  # 明天 → due_at = 明天 09:00
+
+    def test_question_does_not_create_intention(self) -> None:
+        self.assertEqual(self.consolidator.extract_intentions("你能提醒我什么来着？"), [])
+
+    def test_intention_lifecycle(self) -> None:
+        from datetime import datetime, timedelta
+
+        self.store.add_intention("交周报", datetime.now() - timedelta(minutes=1))
+        due = self.store.due_intentions()
+        self.assertEqual(len(due), 1)
+        self.store.complete_intention(due[0]["intention_id"])
+        self.assertEqual(self.store.due_intentions(), [])
+        self.assertEqual(len(self.store.list_intentions(status="done")), 1)
+
+    def test_dream_recombine_cross_domain(self) -> None:
+        # 造 6 条不同记忆，LLM 返回洞察 → entity fact 入库
+        self.consolidator.extract_from_turn("我叫阿动")
+        self.store.add_fact("preference", "喜欢深色主题", confidence=0.8)
+        self.store.add_fact("preference", "常用 Cursor", confidence=0.8)
+        self.store.add_fact("project", "在做记忆系统", confidence=0.8)
+        self.store.add_fact("entity", "常逛 V2EX", confidence=0.8)
+        self.store.add_fact("entity", "关注支付风控", confidence=0.8)
+
+        def fake_llm(prompt: str) -> str:
+            return "用户在做记忆系统且关注支付风控，可能值得给项目加一个支付场景的示例"
+
+        insight = self.consolidator.dream_recombine(fake_llm)
+        self.assertIsNotNone(insight)
+        dreams = [f for f in self.store.list_facts(category="entity") if f.source == "dream"]
+        self.assertEqual(len(dreams), 1)
+        self.assertEqual(dreams[0].confidence, 0.5)  # 低置信起步
+
+    def test_dream_recombine_no_connection(self) -> None:
+        self.store.add_fact("preference", "喜欢深色主题", confidence=0.8)
+        self.store.add_fact("preference", "常用 Cursor", confidence=0.8)
+        self.assertIsNone(self.consolidator.dream_recombine(lambda p: "无"))  # 无连接不入库
+        self.assertIsNone(self.consolidator.dream_recombine(lambda p: None))  # LLM 异常/空

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 from collections.abc import Callable
 
 from screen_agent.activity.store import ActivityEvent
@@ -26,6 +27,12 @@ _SWITCH_RE = re.compile(r"把([^，。,.!！?？]{1,12})换成([^，。,.!！?�
 _PROJECT_PATTERN = re.compile(r"我在做(?:一个)?([^，。,.!！?？]{1,24})(?:项目|系统|工具|助手)?")
 
 _MINING_MIN_MINUTES = 30.0
+
+# 前瞻记忆提取：「提醒我X」「记得明天X」「别忘记X」——意图而非事实，进 intentions 表
+_INTENTION_RE = re.compile(
+    r"(?:提醒我|记得|别忘记|不要忘记)(?:明天|后天|今天|下午|晚上|上午|明天上午|明天下午)?(?:要|去|得)?([^，。,.!！?？]{1,40})"
+)
+_DUE_OFFSET_DAYS = {"明天": 1, "后天": 2}
 
 # 梦境期 LLM 候选提取提示词：模型提议、规则裁决（防幻觉直写）
 EXTRACTION_PROMPT = (
@@ -107,6 +114,58 @@ class Consolidator:
                     self.store.add_fact(category, content, source="chat_llm", confidence=0.55, evidence=evidence)
                     written += 1
         return written
+
+    def extract_intentions(self, user_text: str, now: datetime | None = None) -> list[tuple[str, object]]:
+        """前瞻记忆提取：返回 [(content, due_at|None)]。疑问句同样跳过。"""
+        now = now or datetime.now()
+        if _QUESTION_RE.search(user_text):
+            return []
+        results: list[tuple[str, object]] = []
+        m = _INTENTION_RE.search(user_text)
+        if m:
+            content = m.group(1).strip()
+            if content:
+                due_at = None
+                for hint, days in _DUE_OFFSET_DAYS.items():
+                    if hint in user_text:
+                        due_at = (now + timedelta(days=days)).replace(hour=9, minute=0, second=0, microsecond=0)
+                        break
+                results.append((content, due_at))
+        return results
+
+    def dream_recombine(
+        self,
+        llm_fn: Callable[[str], str],
+        min_facts: int = 6,
+    ) -> str | None:
+        """梦境重组（Discovery by Dreaming，arXiv 2607.16256）：
+        从不同类别各抽一条记忆，让 LLM 找跨域连接；有洞察才入库（entity，低置信）。
+        返回洞察文本，无连接或条件不足返回 None。"""
+        import random
+
+        facts = self.store.list_facts(limit=20)
+        if len(facts) < min_facts:
+            return None
+        a, b = random.sample(facts, 2)
+        if a.category == b.category:
+            return None
+        prompt = (
+            f"记忆A（{a.category}）：{a.content}\n"
+            f"记忆B（{b.category}）: {b.content}\n"
+            "这两条记忆组合起来，能产生什么对用户有用的洞察、联系或提醒？"
+            "一句话以内直接说结论；确实没有有价值的联系就只回答：无"
+        )
+        try:
+            insight = (llm_fn(prompt) or "").strip()
+        except Exception:
+            return None
+        if not insight or insight in ("无", "没有") or len(insight) < 8:
+            return None
+        from datetime import datetime
+
+        content = f"梦境洞察：{insight}（源自：{a.content[:20]} + {b.content[:20]}）"
+        self.store.add_fact("entity", content, source="dream", confidence=0.5, evidence=f"dream:{datetime.now():%Y-%m-%d}")
+        return insight
 
     def mine_projects_from_events(self, events: list[ActivityEvent]) -> int:
         """事件层高频主题 → project fact（同 task_tag 累计时长 ≥ 30 分钟）。"""
