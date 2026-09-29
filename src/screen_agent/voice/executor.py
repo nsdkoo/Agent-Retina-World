@@ -122,12 +122,42 @@ class CommandExecutor:
         webbrowser.open(url)
         return ActionResult(success=True, message=f"已打开网页", detail={"url": url})
 
+    @staticmethod
+    def _resolve_app(target: str) -> str | None:
+        """解析应用可执行路径：存在路径 → PATH → .exe 后缀 → App Paths 注册表。"""
+        import shutil
+        import winreg
+
+        if Path(target).exists():
+            return target
+        for cand in (target, f"{target}.exe"):
+            found = shutil.which(cand)
+            if found:
+                return found
+        stem = Path(target).stem
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(
+                    root, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{stem}.exe"
+                ) as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    val = val.strip('"')
+                    if val and Path(val).exists():
+                        return val
+            except OSError:
+                continue
+        return None
+
     def _open_app(self, intent: Intent) -> ActionResult:
         target = intent.target
-        if Path(target).exists():
-            subprocess.Popen([target], shell=False)
-        else:
-            subprocess.Popen(f'start "" "{target}"', shell=True)
+        resolved = self._resolve_app(target)
+        if not resolved:
+            return ActionResult(
+                success=False,
+                message=f"没找到「{target}」这个应用。告诉我它装在哪，或把路径配到 config 的 apps 别名里",
+                detail={"app": target},
+            )
+        subprocess.Popen([resolved], shell=False)
         return ActionResult(success=True, message=f"正在打开 {target}", detail={"app": target})
 
     def _report(self, intent: Intent) -> ActionResult:

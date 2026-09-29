@@ -144,35 +144,35 @@ class BallWidget(QWidget):
         # 安静：静止时半透明，悬停/活动时提亮（始终保留通透感）
         base_alpha = 0.52 + hover * 0.34 + (0.24 if active else 0.0)
 
-        # 0. 柔和投影（让玻璃点浮起来，但不重）
+        # 0. 柔和投影（暖色暗部，与蜂蜜金棕面板同系）
         for i in range(4):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(20, 30, 48, int((7 + i * 4) * min(1.0, base_alpha))))
+            painter.setBrush(QColor(58, 48, 32, int((7 + i * 4) * min(1.0, base_alpha))))
             spread = 4 - i
             painter.drawEllipse(QPointF(cx, cy + 2.0), radius + spread, radius + spread)
 
-        # 1. 本体：通透磨砂圆（细腻三层，无亮面高光球）
+        # 1. 本体：燕麦白磨砂圆（暖色系，无金属蓝灰）
         grad = QRadialGradient(cx - radius * 0.35, cy - radius * 0.45, radius * 2.0)
-        grad.setColorAt(0.0, QColor(255, 255, 255, int(238 * min(1.0, base_alpha))))
+        grad.setColorAt(0.0, QColor(255, 253, 247, int(238 * min(1.0, base_alpha))))
         if active:
             tint = QColor(accent)
-            tint.setAlpha(int(58 * min(1.0, base_alpha)))
+            tint.setAlpha(int(52 * min(1.0, base_alpha)))
             grad.setColorAt(0.5, tint)
-            grad.setColorAt(0.85, QColor(accent.red() // 3 + 150, accent.green() // 3 + 160, accent.blue() // 3 + 170, int(190 * min(1.0, base_alpha))))
+            grad.setColorAt(0.85, QColor(240, 226, 200, int(190 * min(1.0, base_alpha))))
         else:
-            grad.setColorAt(0.5, QColor(240, 245, 252, int(206 * min(1.0, base_alpha))))
-            grad.setColorAt(0.85, QColor(199, 209, 224, int(190 * min(1.0, base_alpha))))
-        grad.setColorAt(1.0, QColor(158, 172, 195, int(170 * min(1.0, base_alpha))))
+            grad.setColorAt(0.5, QColor(250, 248, 240, int(206 * min(1.0, base_alpha))))
+            grad.setColorAt(0.85, QColor(236, 231, 218, int(190 * min(1.0, base_alpha))))
+        grad.setColorAt(1.0, QColor(214, 206, 188, int(170 * min(1.0, base_alpha))))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(grad)
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
 
-        # 2. 边缘：细描边 + 内侧一圈极淡反光（Liquid Glass 的"暗边+refraction"极简化版）
-        edge = QColor(38, 52, 72, int(78 + 46 * min(1.0, base_alpha)))
+        # 2. 边缘：暖棕细描边 + 内侧一圈极淡反光
+        edge = QColor(96, 82, 58, int(78 + 46 * min(1.0, base_alpha)))
         painter.setPen(QPen(edge, 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
-        inner_hi = QColor(255, 255, 255, int(70 * min(1.0, base_alpha)))
+        inner_hi = QColor(255, 252, 244, int(70 * min(1.0, base_alpha)))
         painter.setPen(QPen(inner_hi, 1.0))
         painter.drawEllipse(QPointF(cx, cy), radius - 1.4, radius - 1.4)
 
@@ -192,11 +192,19 @@ class BallWidget(QWidget):
             rr = radius + 2.8 + self._breathe_phase * 1.4 + level * 3.2
             painter.drawEllipse(QPointF(cx, cy), rr, rr)
         elif self._status == "processing":
-            arc_color = QColor(accent)
-            arc_color.setAlpha(220)
-            painter.setPen(QPen(arc_color, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            halo = QRectF(cx - radius - 3.0, cy - radius - 3.0, (radius + 3.0) * 2, (radius + 3.0) * 2)
-            painter.drawArc(halo, int((self._angle * 3) % 360) * 16, 110 * 16)
+            # 处理中：细环 + 单颗轨道点（比旋转弧干净）
+            import math as _math
+
+            ring = QColor(accent)
+            ring.setAlpha(64)
+            painter.setPen(QPen(ring, 1.2))
+            rr = radius + 3.0
+            painter.drawEllipse(QPointF(cx, cy), rr, rr)
+            ang = _math.radians((self._angle * 3) % 360)
+            pos = QPointF(cx + rr * _math.cos(ang), cy + rr * _math.sin(ang))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(accent))
+            painter.drawEllipse(pos, 2.6, 2.6)
         elif self._status == "speaking":
             for i in range(2):
                 phase = (now * 1.05 + i * 0.5) % 1.0
