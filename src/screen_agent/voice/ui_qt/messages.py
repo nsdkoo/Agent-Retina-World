@@ -105,26 +105,31 @@ class MessageDelegate(QStyledItemDelegate):
         kind = index.data(Qt.ItemDataRole.UserRole) or KIND_BOT
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         width = max(80.0, float(option.rect.width()) - _PAD_H * 2) if option.rect.width() > 0 else 260.0
+        if kind == KIND_USER:
+            width = max(80.0, width - 72)  # 右侧内缩块：竖线 + 文字
         doc = self._doc(kind, text, width)
-        return QSize(int(width), int(doc.size().height()) + _PAD_V * 2)
+        return QSize(int(option.rect.width() if option.rect.width() > 0 else width), int(doc.size().height()) + _PAD_V * 2)
 
     def paint(self, painter, option, index) -> None:  # noqa: ANN001
         kind = index.data(Qt.ItemDataRole.UserRole) or KIND_BOT
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         rect = option.rect
         width = max(80.0, float(rect.width()) - _PAD_H * 2)
+        line_x = None
+        if kind == KIND_USER:
+            # 右侧内缩块：文字靠右 + 金棕竖线，与助手消息明确区分
+            width = max(80.0, width - 72)
+            line_x = rect.right() - 10
         doc = self._doc(kind, text, width)
         h = doc.size().height()
 
         painter.save()
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        if kind == KIND_USER:
-            # Claude 式右竖线：贴内容右缘
-            line_x = rect.right() - _PAD_H
-            painter.setPen(QColor(self._t["user_line"]))
+        if line_x is not None:
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(self._t["user_line"]))
             painter.drawRect(
-                int(line_x), int(rect.top() + _PAD_V), 2, max(4, int(h) - 4)
+                int(line_x), int(rect.top() + _PAD_V + 1), 2, max(4, int(h) - 2)
             )
         painter.translate(rect.left() + _PAD_H, rect.top() + _PAD_V)
         doc.drawContents(painter)
