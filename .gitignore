@@ -26,3 +26,4 @@ models/
 __pycache__/
 *.pyc
 *.pyo
+scripts/_patch_views.py
