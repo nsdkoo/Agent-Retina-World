@@ -176,13 +176,13 @@ class InputEdit(QTextEdit):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("InputBox")
-        self.setPlaceholderText("打字或说话都行 · Enter 发送")
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setPlaceholderText("有什么可以帮你？Enter 发送")
+        # 固定高度：内容超出时框内滚动（对齐主流 AI 聊天输入框，面板高度恒定）
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(INPUT_MIN_H)
         self._long_text: str | None = None
-        self.document().contentsChanged.connect(self._adjust_height)
 
     def focusInEvent(self, event) -> None:  # noqa: N802
         super().focusInEvent(event)
@@ -193,11 +193,7 @@ class InputEdit(QTextEdit):
         self.focus_changed.emit(False)
 
     def _adjust_height(self) -> None:
-        doc_h = int(self.document().size().height()) + 22
-        target = max(INPUT_MIN_H, min(INPUT_MAX_H, doc_h))
-        if target != self.height():
-            self.setFixedHeight(target)
-            self.height_changed.emit()
+        """固定高度：不再自增，超出的内容由框内滚动条承接。"""
 
     def insertFromMimeData(self, source) -> None:  # noqa: N802
         text = source.text() or ""
@@ -217,8 +213,6 @@ class InputEdit(QTextEdit):
     def clear_all(self) -> None:
         self._long_text = None
         self.clear()
-        self.setFixedHeight(INPUT_MIN_H)
-        self.height_changed.emit()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
