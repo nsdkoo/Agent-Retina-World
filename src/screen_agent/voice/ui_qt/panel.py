@@ -26,8 +26,8 @@ from PyQt6.QtWidgets import (
 
 PANEL_W = 356              # 窗口宽（含投影边距）
 SHADOW_MARGIN = 10
-INPUT_MIN_H = 56
-INPUT_MAX_H = 112          # 约 5 行
+INPUT_MIN_H = 72
+INPUT_MAX_H = 140          # 约 6 行，备忘录式
 REPLY_MAX_H = 196          # 回复卡限高，超出内部滚动
 LONG_TEXT_THRESHOLD = 400  # 超过这么多字折叠成 chip
 CHIP_TEMPLATE = "[已粘贴长文 {n} 字 · 回车发送]"
@@ -101,7 +101,7 @@ def build_style(theme: str) -> str:
 }}
 #InputBox {{
     background: transparent; color: {t['text']};
-    border: none; padding: 9px 4px 9px 11px; font-size: 13px;
+    border: none; padding: 14px 4px 14px 12px; font-size: 13px;
     selection-background-color: #3b82f6; selection-color: #ffffff;
 }}
 #SendBtn {{
@@ -500,19 +500,10 @@ class ChatPanel(QWidget):
     # ---- 高度自适应 ----
 
     def _relayout(self) -> None:
-        reply_h = self._scroll.height() + 7 if self._reply_visible else 0
-        activity_h = self._activity.sizeHint().height() if self._activity_visible else 0
-        meta_h = (max(16, self._status_label.sizeHint().height()) + 2) if self._reply_visible else 0
-        header_h = 16
-        greet_h = 0 if self._reply_visible else self._greeting.sizeHint().height()
-        total = (
-            SHADOW_MARGIN + 8 + header_h + greet_h + 4 + self._input.height() + 6 + meta_h
-            + (6 + reply_h if reply_h else 0)
-            + (4 + activity_h if activity_h else 0)
-            + 8 + SHADOW_MARGIN + 2
-        )
+        """高度直接取布局 sizeHint——子件高度都已显式锁定，布局自己算总高，不再手拼算术。"""
+        hint = self.layout().sizeHint()
         self.setFixedWidth(PANEL_W)
-        self.setFixedHeight(int(total))
+        self.setFixedHeight(int(hint.height()) + 2)
         if self._on_height_changed is not None:
             self._on_height_changed()
 
