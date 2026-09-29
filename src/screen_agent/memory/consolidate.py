@@ -24,6 +24,7 @@ _REMEMBER_PATTERN = re.compile(r"记住[：:]?(.{1,40})")
 _PROJECT_PATTERN = re.compile(r"我在做(?:一个)?([^，。,.!！?？]{1,24})(?:项目|系统|工具|助手)?")
 
 _MINING_MIN_MINUTES = 30.0
+_QUESTION_RE = re.compile(r"[?？]|吗[？?]?\s*$|什么|哪些|怎么|怎么样|多少|几[点个时]|是谁|在哪")
 
 
 class Consolidator:
@@ -37,16 +38,18 @@ class Consolidator:
         llm_fn: Callable[[str], list[str]] | None = None,
         evidence: str = "",
     ) -> int:
-        """从一轮对话提取事实，返回新写入/更新的 fact 数。evidence 溯源到来源轮次/会话。"""
+        """从一轮对话提取事实，返回新写入/更新的 fact 数。evidence 溯源到来源轮次/会话。
+        疑问句不挖事实（"你喜欢什么"≠"你喜欢X"），只有显式「记住X」例外。"""
         written = 0
+        is_question = bool(_QUESTION_RE.search(user_text))
         for pattern in _NAME_PATTERNS:
             m = pattern.search(user_text)
-            if m:
+            if m and not is_question:
                 self.store.add_fact("profile", f"用户名字是{m.group(1)}", source="chat_rule", confidence=0.9, evidence=evidence)
                 written += 1
                 break
         m = _PREF_PATTERN.search(user_text)
-        if m:
+        if m and not is_question:
             self.store.add_fact("preference", f"用户喜欢/常用：{m.group(1).strip()}", source="chat_rule", confidence=0.75, evidence=evidence)
             written += 1
         m = _REMEMBER_PATTERN.search(user_text)
@@ -54,7 +57,7 @@ class Consolidator:
             self.store.add_fact("entity", m.group(1).strip(), source="chat_rule", confidence=0.8, evidence=evidence)
             written += 1
         m = _PROJECT_PATTERN.search(user_text)
-        if m:
+        if m and not is_question:
             self.store.add_fact("project", f"用户在做：{m.group(1).strip()}", source="chat_rule", confidence=0.7, evidence=evidence)
             written += 1
 

@@ -65,14 +65,14 @@ class StoreV2Tests(unittest.TestCase):
 
     def test_session_persistence_roundtrip(self) -> None:
         sid = self.store.open_session()
-        self.store.append_turn(sid, "user", "我叫阿云")
-        self.store.append_turn(sid, "assistant", "好的阿云")
+        self.store.append_turn(sid, "user", "我叫阿动")
+        self.store.append_turn(sid, "assistant", "好的阿动")
         # 模拟重启：新实例从同库恢复
         store2 = MemoryStoreV2(self.store.db_path)
         self.assertEqual(store2.latest_open_session(), sid)
         turns = store2.load_session_turns(sid)
         self.assertEqual(len(turns), 2)
-        self.assertEqual(turns[0]["content"], "我叫阿云")
+        self.assertEqual(turns[0]["content"], "我叫阿动")
         store2.close_session(sid)
         store3 = MemoryStoreV2(self.store.db_path)
         self.assertIsNone(store3.latest_open_session())
@@ -135,10 +135,10 @@ class AssemblerTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_prompt_contains_facts_and_episodes(self) -> None:
-        self.store.add_fact("profile", "用户名字是阿云", confidence=0.9)
+        self.store.add_fact("profile", "用户名字是阿动", confidence=0.9)
         self.store.save_event(_event(1, hours_ago=1))
         prompt = ContextAssembler(self.store).build_system_prompt("你是助手", "在做什么")
-        self.assertIn("用户名字是阿云", prompt)
+        self.assertIn("用户名字是阿动", prompt)
         self.assertIn("相关屏幕活动", prompt)
         self.assertTrue(prompt.startswith("你是助手"))
 
@@ -159,10 +159,10 @@ class ConsolidatorTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_extract_name_pattern(self) -> None:
-        n = self.consolidator.extract_from_turn("我叫阿云，记住我", evidence="s-9")
+        n = self.consolidator.extract_from_turn("我叫阿动，记住我", evidence="s-9")
         self.assertGreaterEqual(n, 1)
         facts = self.store.list_facts(category="profile")
-        self.assertTrue(any("阿云" in f.content for f in facts))
+        self.assertTrue(any("阿动" in f.content for f in facts))
         self.assertEqual(facts[0].evidence, "s-9")
 
     def test_extract_preference_and_project(self) -> None:

@@ -260,6 +260,14 @@ class VoiceAssistant:
                 logger.debug("记忆固化/持久化失败", exc_info=True)
         if intent.type == IntentType.END_SESSION:
             self._set_session(False)
+            # 用户明确退出：关闭当前会话（归档），下一条指令开新会话
+            try:
+                self.memory.close_session(self._session_id)
+                self._session_id = self.memory.open_session()
+                self._chat_history.clear()
+                self._unconsolidated.clear()
+            except Exception:
+                logger.debug("会话轮转失败", exc_info=True)
         elif self.session_enabled and not self._in_session:
             self._set_session(True)
         else:
@@ -349,10 +357,32 @@ class VoiceAssistant:
             self.speaker.stop()
 
     def stop(self) -> None:
+        """进程退出。会话保持 open——跨重启延续（用户说「退出」才真正关闭会话）。"""
         self._running = False
+        self._consolidation_stop.set()
         self.audio_loop.stop()
 
     def run_in_background(self) -> threading.Thread:
         thread = threading.Thread(target=self.run_forever, daemon=True)
         thread.start()
+        consolidation = threading.Thread(target=self._consolidation_loop, daemon=True)
+        consolidation.start()
         return thread
+
+    def _consolidation_loop(self) -> None:
+        """睡眠门控固化（Google/Cornell Sleep 范式 + Sleep-Gated 披露）：
+        只在 idle 且超过 5 分钟无交互时运行，固化永不与交互抢资源。"""
+        while not self._consolidation_stop.wait(60.0):
+            try:
+                idle_long = time.monotonic() - self._last_activity > 300.0
+                if self._status != "idle" or not idle_long:
+                    continue
+                events = self.memory.list_events(limit=200)
+                self.consolidator.mine_projects_from_events(events)
+                for user_text, reply in self._unconsolidated:
+                    self.consolidator.extract_from_turn(
+                        user_text, reply, evidence=f"session:{self._session_id}"
+                    )
+                self._unconsolidated.clear()
+            except Exception:
+                logger.debug("睡眠固化失败", exc_info=True)
