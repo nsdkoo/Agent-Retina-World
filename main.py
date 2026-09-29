@@ -127,12 +127,19 @@ def cmd_demo(args: argparse.Namespace) -> None:
 def cmd_voice(args: argparse.Namespace) -> None:
     from screen_agent.config import load_yaml
     from screen_agent.voice.assistant import VoiceAssistant
+    from screen_agent.voice.instance import ensure_single_instance, release_instance
     from screen_agent.voice.model_download import ensure_sherpa_models
 
     if args.download_model:
         ensure_sherpa_models(ROOT / "models")
         print("全部模型就绪")
         return
+
+    # 单实例接管：旧实例还在跑就先关掉，避免开一堆终端
+    ensure_single_instance(ROOT)
+    import atexit
+
+    atexit.register(release_instance, ROOT)
 
     try:
         assistant = VoiceAssistant(args.config, project_root=ROOT)
