@@ -373,18 +373,11 @@ class VoiceAssistant:
 
     def run_forever(self) -> None:
         self._running = True
-        names = "、".join(f"「{n}」" for n in self.wake_names[:3])
-        chat_hint = f" · 对话模型 {self.chat_model}" if self.chat_enabled else ""
-        self.emit_result(f"语音助手已启动（离线流式识别{chat_hint}）· 呼唤 {names}")
-        if self.session_enabled:
-            self.emit_result("唤醒后进入连续对话，说「退出」结束")
-        self.speak("语音助手已就绪")
-
         try:
             self.audio_loop.run()
         except RuntimeError as exc:
+            # 麦克风缺失/禁用等启动失败只记日志，不弹到对话流（用户打字路径不受影响）
             logger.error("语音主循环退出: %s", exc)
-            self.emit_result(str(exc).splitlines()[0])
         finally:
             self.speaker.stop()
 
