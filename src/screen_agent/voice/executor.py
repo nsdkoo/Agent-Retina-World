@@ -30,6 +30,7 @@ class CommandExecutor:
         chat_history: list[dict[str, str]] | None = None,
         max_history: int = 6,
         screen_context_fn: Callable[[], str] | None = None,
+        memory_context_fn: Callable[[str], str] | None = None,
         on_chat_delta: Callable[[str], None] | None = None,
     ) -> None:
         self.pipeline = pipeline
@@ -38,6 +39,7 @@ class CommandExecutor:
         self.chat_history = chat_history if chat_history is not None else []
         self.max_history = max_history
         self._screen_context_fn = screen_context_fn
+        self._memory_context_fn = memory_context_fn
         self.on_chat_delta = on_chat_delta
 
     def run(self, intent: Intent) -> ActionResult:

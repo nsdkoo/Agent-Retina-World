@@ -5,7 +5,8 @@ from pathlib import Path
 
 import yaml
 
-from screen_agent.activity.store import ActivityAggregator, MemoryStore
+from screen_agent.activity.store import ActivityAggregator
+from screen_agent.memory.store import MemoryStoreV2 as MemoryStore
 from screen_agent.capture.screen import ScreenCapturer
 from screen_agent.config import load_yaml, resolve_secret
 from screen_agent.dedup.hasher import ScreenshotDeduper

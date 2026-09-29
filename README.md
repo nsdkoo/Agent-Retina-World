@@ -2,7 +2,7 @@
 
 **桌面屏幕世界感知 Agent** — 让 AI 理解你在电脑上做了什么，并主动提供服务。
 
-> 个人原创项目 · v0.7
+> 个人原创项目 · v0.8
 
 ![系统架构](docs/images/architecture.png)
 
@@ -10,12 +10,24 @@
 
 | 文档 | 说明 |
 | --- | --- |
+| [记忆系统设计](docs/memory-design.md) | **三层记忆对标 Letta/Mem0/Zep/GA + 2026 最新研究（睡眠门控/类型衰减/溯源）** |
+| --- | --- |
 | [开发过程记录](docs/development-journal.md) | **版本演进、Git 时间线、简历叙事** |
 | [变更日志](docs/CHANGELOG.md) | 按版本摘要 |
 | [Plan 归档](docs/plans/README.md) | Cursor Plan 模式文档入库说明 |
 | [架构设计](docs/architecture.md) | 系统设计 |
 | [语音助手](docs/voice-assistant.md) | 唤醒、会话、指令 |
 | [Demo 试跑](docs/demo-quickstart.md) | 5 步本地验证 |
+
+## v0.8 更新 · 三层记忆系统（对标顶级 agent 记忆）
+
+- **分层记忆**：情节层（屏幕活动 + importance 启发式）/ 语义层（画像·偏好·项目·实体 facts）/ 工作层（会话持久化，重启可恢复上次对话）
+- **三维检索**（Generative Agents）：score = 0.4·recency（48h 半衰期）+ 0.3·importance + 0.3·relevance（CJK bigram 重叠）
+- **写入对账**（Mem0）：同义新旧 fact 更新不追加，confidence 递增；每条 fact 强制 evidence 溯源（Agent Zero）
+- **类型条件衰减**（ScrubJay 8 月）：profile 30 天 / preference 14 天 / project 7 天 / entity 3 天半衰期
+- **睡眠门控固化**（Google/Cornell Sleep 范式）：idle 超 5 分钟才跑固化线程，交互零争用
+- **上下文装配器**：system prompt = facts + 相关 episodes + 工作记忆，1200 token 预算
+- 规则固化 v1（"我叫X"/"我喜欢X"/"我在做X"/"记住X" + 事件高频主题挖掘），LLM 候选提取留 hook（模型提议、规则裁决）
 
 ## v0.7 更新 · 流式语音 + Qt 悬浮球 + 多后端对话
 
@@ -221,6 +233,7 @@ embedding:
 - [x] 语音唤醒常驻助手（呼唤名字操作）
 - [x] LLM 自由对话（多后端：本地 vLLM 千问 / DeepSeek API）
 - [x] v0.7 流式离线语音 + KWS 唤醒 + vits TTS + Qt 悬浮球
+- [x] v0.8 三层记忆系统（分层 + 三维检索 + 对账 + 睡眠门控固化）
 - [ ] 跨会话任务归并与证据追溯
 
 ## License

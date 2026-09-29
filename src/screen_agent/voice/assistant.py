@@ -9,7 +9,11 @@ from typing import Callable
 
 from screen_agent.config import load_yaml
 from screen_agent.pipeline import PerceptionPipeline
-from screen_agent.understand.chat import build_chat_client
+from screen_agent.understand.chat import SYSTEM_PROMPT, build_chat_client
+from screen_agent.memory.assembler import ContextAssembler
+from screen_agent.memory.consolidate import Consolidator
+from screen_agent.memory.retriever import HybridRetriever
+from screen_agent.memory.store import MemoryStoreV2
 from screen_agent.voice.executor import ActionResult, CommandExecutor
 from screen_agent.voice.intents import IntentType, parse_intent
 from screen_agent.voice.listener import Speaker
@@ -84,6 +88,22 @@ class VoiceAssistant:
         )
 
         self._chat_history: list[dict[str, str]] = []
+
+        # ---- 记忆系统 v2：分层存储 + 三维检索 + 装配器 + 固化器 ----
+        memory_cfg = raw.get("memory", {}) if isinstance(raw.get("memory", {}), dict) else {}
+        self.memory = MemoryStoreV2(root / memory_cfg.get("db_path", "data/memory/events.db"))
+        self.retriever = HybridRetriever(self.memory)
+        self.assembler = ContextAssembler(self.memory, self.retriever)
+        self.consolidator = Consolidator(self.memory)
+        # 工作记忆恢复：接上次未关闭的会话
+        self._session_id = self.memory.latest_open_session() or self.memory.open_session()
+        for turn in self.memory.load_session_turns(self._session_id, limit=12):
+            if turn["role"] in ("user", "assistant"):
+                self._chat_history.append(turn)
+        self._unconsolidated: list[tuple[str, str]] = []  # 待固化 (user, assistant)
+        self._last_activity = time.monotonic()
+        self._consolidation_stop = threading.Event()
+
         chat_client = build_chat_client(chat_cfg)
         self.executor = CommandExecutor(
             self.pipeline,
@@ -92,6 +112,7 @@ class VoiceAssistant:
             chat_history=self._chat_history,
             max_history=int(chat_cfg.get("max_history", 6)),
             screen_context_fn=self._recent_screen_context,
+            memory_context_fn=self._memory_context,
             on_chat_delta=self._emit_result_delta,
         )
         self.app_aliases: dict[str, str] = voice_cfg.get("apps", {})
@@ -115,6 +136,14 @@ class VoiceAssistant:
                 str(b.get("model", "?")) for b in backends if isinstance(b, dict)
             )
         return str(chat_cfg.get("model", "gpt-5.4-mini"))
+
+    def _memory_context(self, user_text: str) -> str:
+        """记忆装配器：语义 facts（类型衰减排序）+ 三维检索 episodes → system prompt。"""
+        try:
+            return self.assembler.build_system_prompt(SYSTEM_PROMPT, user_text)
+        except Exception:
+            logger.debug("记忆装配失败", exc_info=True)
+            return SYSTEM_PROMPT
 
     def _recent_screen_context(self) -> str:
         try:
@@ -166,6 +195,8 @@ class VoiceAssistant:
 
     def set_status(self, status: str) -> None:
         self._status = status
+        if status != "idle":
+            self._last_activity = time.monotonic()
         if self._on_status:
             self._on_status(status)
 
@@ -210,6 +241,23 @@ class VoiceAssistant:
             return None
         intent = parse_intent(command, self.app_aliases, self.url_aliases)
         result = self.executor.run(intent)
+        self._last_activity = time.monotonic()
+        if (
+            intent.type == IntentType.CHAT
+            and result is not None
+            and result.success
+            and result.message
+        ):
+            try:
+                self.consolidator.extract_from_turn(
+                    command, result.message,
+                    evidence=f"session:{self._session_id}",
+                )
+                self.memory.append_turn(self._session_id, "user", command)
+                self.memory.append_turn(self._session_id, "assistant", result.message)
+                self._unconsolidated.append((command, result.message))
+            except Exception:
+                logger.debug("记忆固化/持久化失败", exc_info=True)
         if intent.type == IntentType.END_SESSION:
             self._set_session(False)
         elif self.session_enabled and not self._in_session:

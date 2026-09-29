@@ -57,6 +57,18 @@
 - 项目初始化：截图、pHash、VLM、Activity、SQLite、主动服务
 - CLI：`once` / `watch` / `report`
 - 架构文档与架构图
+## [0.8.0] - 2026-09-29
+
+### 新增
+
+- 三层记忆系统 `memory/`：MemoryStoreV2（events+importance / facts+evidence / sessions+turns）
+- HybridRetriever：recency × importance × relevance 三维打分（GA 公式）
+- ContextAssembler：记忆 → system prompt 三段式装配，token 预算
+- Consolidator：规则固化（对话模式 + 事件高频挖掘）+ LLM 候选 hook
+- 类型条件衰减（ScrubJay）：按 category 半衰期；睡眠门控固化线程（idle>5min 才跑）
+- 对话流式上屏（SSE 增量 + 打字机兜底）；用户消息右对齐
+- 记忆测试 14 个，全仓 39 个全绿
+
 ## [0.7.0] - 2026-09-28
 
 ### 新增

@@ -1,3 +1,3 @@
 """Agent-Retina-World · 屏幕世界感知 Agent"""
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
