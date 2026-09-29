@@ -41,6 +41,7 @@ class CommandExecutor:
         self._screen_context_fn = screen_context_fn
         self._memory_context_fn = memory_context_fn
         self.on_chat_delta = on_chat_delta
+        self._app_resolver = None  # 惰性初始化（tools.apps.AppResolver）
 
     def run(self, intent: Intent) -> ActionResult:
         handlers = {
@@ -150,15 +151,30 @@ class CommandExecutor:
 
     def _open_app(self, intent: Intent) -> ActionResult:
         target = intent.target
-        resolved = self._resolve_app(target)
-        if not resolved:
+        if self._app_resolver is None:
+            from screen_agent.tools.apps import AppResolver
+
+            cache = Path(__file__).resolve().parents[3] / "data" / "cache" / "app_index.json"
+            self._app_resolver = AppResolver(cache)
+        try:
+            resolved = self._app_resolver.resolve(target)
+        except Exception as exc:  # noqa: BLE001 - 解析层异常降级为友好提示
+            return ActionResult(success=False, message=f"解析应用「{target}」失败：{exc}")
+        if resolved is None:
             return ActionResult(
                 success=False,
                 message=f"没找到「{target}」这个应用。告诉我它装在哪，或把路径配到 config 的 apps 别名里",
                 detail={"app": target},
             )
-        subprocess.Popen([resolved], shell=False)
-        return ActionResult(success=True, message=f"正在打开 {target}", detail={"app": target})
+        try:
+            self._app_resolver.launch(resolved)
+        except Exception as exc:  # noqa: BLE001
+            return ActionResult(success=False, message=f"启动 {target} 失败：{exc}")
+        return ActionResult(
+            success=True,
+            message=f"正在打开 {target}",
+            detail={"app": resolved.target, "kind": resolved.kind},
+        )
 
     def _report(self, intent: Intent) -> ActionResult:
         text = self.pipeline.proactive.daily_summary()
