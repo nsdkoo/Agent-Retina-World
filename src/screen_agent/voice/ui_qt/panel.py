@@ -101,9 +101,14 @@ def build_style(theme: str) -> str:
     border: 1px solid {t['panel_border']};
     border-radius: 16px;
 }}
+#InputBoxCard {{
+    background: {t['panel_top']};
+    border: 1px solid {t['panel_border']};
+    border-radius: 12px;
+}}
 #InputBox {{
     background: transparent; color: {t['text']};
-    border: none; padding: 14px 4px 14px 12px; font-size: 13px;
+    border: none; padding: 10px 10px 2px 10px; font-size: 13px;
     selection-background-color: #3b82f6; selection-color: #ffffff;
 }}
 #SendBtn {{
@@ -386,24 +391,28 @@ class ChatPanel(QWidget):
         self._input_divider.setFixedHeight(1)
         root.addWidget(self._input_divider)
 
-        # 状态点（输入框左侧的呼吸指示）
-        self._dot = QLabel()
-        self._dot.setFixedSize(7, 7)
-        self._dot.setStyleSheet("border-radius: 3px; background: #9a917f;")
+        # 输入容器（ChatGPT/Claude 桌面式）：文字区在上占满全宽，控制行在容器内底部
+        self._input_box = QFrame()
+        self._input_box.setObjectName("InputBoxCard")
+        box_layout = QVBoxLayout(self._input_box)
+        box_layout.setContentsMargins(4, 4, 4, 6)
+        box_layout.setSpacing(2)
 
-        input_row = QHBoxLayout()
-        input_row.setSpacing(7)
-        # 状态点对齐占位文字第一行（输入区上 padding 14 + 行高一半 ≈ 22）
-        dot_wrap = QVBoxLayout()
-        dot_wrap.setContentsMargins(0, 19, 0, 0)  # 与占位文字首行垂直居中
-        dot_wrap.addWidget(self._dot)
-        dot_wrap.addStretch(1)
-        input_row.addLayout(dot_wrap)
         self._input = InputEdit()
         self._input.submitted.connect(self._submit)
         self._input.escape_pressed.connect(self._handle_escape)
         self._input.height_changed.connect(self._relayout)
         self._input.focus_changed.connect(self._on_input_focus)
+        box_layout.addWidget(self._input)
+
+        # 控制行：状态点 + 模型切换 + 发送（容器内底部）
+        self._dot = QLabel()
+        self._dot.setFixedSize(7, 7)
+        self._dot.setStyleSheet("border-radius: 3px; background: #9a917f;")
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(6)
+        ctrl_row.addWidget(self._dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        ctrl_row.addStretch(1)
         self._model_btn = QPushButton("")
         self._model_btn.setObjectName("ModelBtn")
         self._model_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -412,10 +421,10 @@ class ChatPanel(QWidget):
         self._send_btn.setObjectName("SendBtn")
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_btn.clicked.connect(self._submit)
-        input_row.addWidget(self._input, 1)
-        input_row.addWidget(self._model_btn, 0, Qt.AlignmentFlag.AlignBottom)
-        input_row.addWidget(self._send_btn, 0, Qt.AlignmentFlag.AlignBottom)
-        root.addLayout(input_row)
+        ctrl_row.addWidget(self._model_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        ctrl_row.addWidget(self._send_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        box_layout.addLayout(ctrl_row)
+        root.addWidget(self._input_box)
 
 
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, self._handle_escape)
@@ -479,6 +488,11 @@ class ChatPanel(QWidget):
             f"#Panel {{ border: 1px solid {color}; border-radius: 16px;"
             f" background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             f" stop:0 {t['panel_top']}, stop:1 {t['panel_bottom']}); }}"
+        )
+        # 输入容器边框随焦点提亮
+        self._input_box.setStyleSheet(
+            f"#InputBoxCard {{ background: {t['panel_top']};"
+            f" border: 1px solid {color}; border-radius: 12px; }}"
         )
 
     # ---- 高度自适应 ----
