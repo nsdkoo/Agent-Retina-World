@@ -30,6 +30,7 @@ class CommandExecutor:
         chat_history: list[dict[str, str]] | None = None,
         max_history: int = 6,
         screen_context_fn: Callable[[], str] | None = None,
+        on_chat_delta: Callable[[str], None] | None = None,
     ) -> None:
         self.pipeline = pipeline
         self.web_url = web_url
@@ -37,6 +38,7 @@ class CommandExecutor:
         self.chat_history = chat_history if chat_history is not None else []
         self.max_history = max_history
         self._screen_context_fn = screen_context_fn
+        self.on_chat_delta = on_chat_delta
 
     def run(self, intent: Intent) -> ActionResult:
         handlers = {
@@ -84,7 +86,13 @@ class CommandExecutor:
         messages.append({"role": "user", "content": user_text})
 
         try:
-            reply = self.chat_client.complete(messages, system=system)
+            if self.on_chat_delta is not None:
+                # 流式优先：增量实时回调（传累计全文）；流式失败自动回退非流式
+                reply = self.chat_client.complete_stream(
+                    messages, system=system, on_delta=self.on_chat_delta
+                )
+            else:
+                reply = self.chat_client.complete(messages, system=system)
         except Exception as exc:
             logger.exception("Chat 请求失败")
             return ActionResult(success=False, message=f"对话失败：{exc}")

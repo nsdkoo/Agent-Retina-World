@@ -92,6 +92,7 @@ class VoiceAssistant:
             chat_history=self._chat_history,
             max_history=int(chat_cfg.get("max_history", 6)),
             screen_context_fn=self._recent_screen_context,
+            on_chat_delta=self._emit_result_delta,
         )
         self.app_aliases: dict[str, str] = voice_cfg.get("apps", {})
         self.url_aliases: dict[str, str] = voice_cfg.get("urls", {})
@@ -103,6 +104,7 @@ class VoiceAssistant:
         self._on_status: Callable[[str], None] | None = None
         self._on_transcript: Callable[[str], None] | None = None
         self._on_result: Callable[[str], None] | None = None
+        self._on_result_delta: Callable[[str], None] | None = None
         self._on_session: Callable[[bool], None] | None = None
 
     @staticmethod
@@ -130,6 +132,23 @@ class VoiceAssistant:
 
     def on_result(self, cb: Callable[[str], None]) -> None:
         self._on_result = cb
+
+    def on_result_delta(self, cb: Callable[[str], None]) -> None:
+        """注册流式增量回调（累计全文）。UI 用来边生成边显示。"""
+        self._on_result_delta = cb
+
+    def _emit_result_delta(self, accumulated: str) -> None:
+        """节流转发：~90ms 一次，避免高频信号打爆 UI 事件循环；最终全文由 emit_result 兜底。"""
+        now = time.monotonic()
+        if now - getattr(self, "_last_delta_emit", 0.0) < 0.09:
+            return
+        self._last_delta_emit = now
+        if self._on_result_delta is None:
+            return
+        try:
+            self._on_result_delta(accumulated)
+        except Exception:
+            logger.debug("delta 回调异常", exc_info=True)
 
     def on_session(self, cb: Callable[[bool], None]) -> None:
         self._on_session = cb

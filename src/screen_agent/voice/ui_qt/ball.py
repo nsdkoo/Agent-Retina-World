@@ -449,8 +449,14 @@ class QtFloatingBall:
             # 常驻到播报结束（play_end 再给 3.5s 收尾），不打断你当下的视线
             toast.show_message(text, "Bot", timeout_ms=None, anchor=ball_anchor())
 
+        def on_delta(accumulated: str) -> None:
+            signals.partial.emit(accumulated)
+            if accumulated:
+                toast.show_message(accumulated, "Bot", timeout_ms=None, anchor=ball_anchor())
+
         self.assistant.on_transcript(on_transcript)
         self.assistant.on_result(on_result)
+        self.assistant.on_result_delta(on_delta)
 
         def play_start_chain() -> None:
             self.assistant.audio_loop.set_muted_mic()

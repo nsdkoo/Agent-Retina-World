@@ -106,3 +106,64 @@ class KeywordBuildTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamTests(unittest.TestCase):
+    def _client(self, base_url: str, model: str) -> OpenAICompatibleChatClient:
+        return OpenAICompatibleChatClient(
+            base_url=base_url, model=model, api_key="k", fallback_model=""
+        )
+
+    def test_complete_stream_accumulates(self) -> None:
+        client = self._client("http://ok", "m")
+
+        def fake_stream(model, messages, on_delta):
+            parts = ["你", "好", "，", "世界"]
+            full = ""
+            for part in parts:
+                full += part
+                if on_delta:
+                    on_delta(full)
+            return full
+
+        client._request_stream = fake_stream  # type: ignore[attr-defined]
+        accumulated: list[str] = []
+        reply = client.complete_stream(
+            [{"role": "user", "content": "hi"}], on_delta=accumulated.append
+        )
+        self.assertEqual(reply, "你好，世界")
+        self.assertEqual(accumulated[-1], "你好，世界")
+        self.assertEqual(len(accumulated), 4)
+
+    def test_complete_stream_falls_back_to_non_stream(self) -> None:
+        client = self._client("http://ok", "m")
+
+        def bad_stream(model, messages, on_delta):
+            raise RuntimeError("stream unsupported")
+
+        client._request_stream = bad_stream  # type: ignore[attr-defined]
+        client.complete = lambda messages, system=None: "非流式兜底"  # type: ignore[method-assign]
+        reply = client.complete_stream([{"role": "user", "content": "hi"}])
+        self.assertEqual(reply, "非流式兜底")
+
+    def test_multi_backend_stream_fallback(self) -> None:
+        ok = self._client("http://ok", "m")
+
+        def fake_stream(model, messages, on_delta):
+            full = "回答"
+            if on_delta:
+                on_delta(full)
+            return full
+
+        ok._request_stream = fake_stream  # type: ignore[attr-defined]
+
+        bad = self._client("http://bad", "m")
+        bad._request_stream = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))  # type: ignore[attr-defined]
+
+        multi = MultiBackendChatClient([bad, ok])
+        got: list[str] = []
+        reply = multi.complete_stream(
+            [{"role": "user", "content": "hi"}], on_delta=got.append
+        )
+        self.assertEqual(reply, "回答")
+        self.assertEqual(got, ["回答"])

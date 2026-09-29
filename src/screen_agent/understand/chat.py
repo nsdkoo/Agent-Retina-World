@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,74 @@ class OpenAICompatibleChatClient:
         data = resp.json()
         return str(data["choices"][0]["message"]["content"]).strip()
 
+    def complete_stream(
+        self,
+        messages: list[dict[str, str]],
+        system: str | None = None,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """流式补全：SSE 增量回调 on_delta(累计全文)，失败回退非流式。"""
+        payload_messages: list[dict[str, str]] = []
+        if system:
+            payload_messages.append({"role": "system", "content": system})
+        payload_messages.extend(messages)
+
+        last_error: Exception | None = None
+        for model in (self.model, self.fallback_model):
+            if not model:
+                continue
+            try:
+                return self._request_stream(model, payload_messages, on_delta)
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Chat 流式 %s 失败，尝试回退: %s", model, exc)
+
+        if last_error:
+            logger.warning("流式全部失败，回退非流式: %s", last_error)
+        return self.complete(messages, system=system)
+
+    def _request_stream(
+        self,
+        model: str,
+        messages: list[dict[str, str]],
+        on_delta: Callable[[str], None] | None,
+    ) -> str:
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "stream": True,
+        }
+        parts: list[str] = []
+        with self._client.stream(
+            "POST",
+            f"{self.base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except ValueError:
+                    continue
+                choices = obj.get("choices") or [{}]
+                delta = str((choices[0].get("delta") or {}).get("content") or "")
+                if delta:
+                    parts.append(delta)
+                    if on_delta:
+                        on_delta("".join(parts))
+        text = "".join(parts).strip()
+        if not text:
+            raise RuntimeError("流式返回为空")
+        return text
+
 
 class DisabledChatClient:
     """Chat 未启用时的占位客户端。"""
@@ -163,6 +231,27 @@ class MultiBackendChatClient:
         if last_error:
             raise last_error
         raise RuntimeError("Chat 请求失败")
+
+    def complete_stream(
+        self,
+        messages: list[dict[str, str]],
+        system: str | None = None,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """按偏好顺序流式调用后端；某后端流式失败自动切下一个，全部失败回退非流式。"""
+        last_error: Exception | None = None
+        for backend in self._ordered():
+            try:
+                return backend.complete_stream(messages, system=system, on_delta=on_delta)
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Chat 流式后端 %s 失败，切换下一个: %s",
+                    getattr(backend, "name", backend.base_url), exc,
+                )
+        if last_error:
+            logger.warning("所有后端流式失败，回退非流式: %s", last_error)
+        return self.complete(messages, system=system)
 
 
 def _build_backend(entry: dict[str, Any], default_max_tokens: int, default_timeout: float) -> OpenAICompatibleChatClient:
