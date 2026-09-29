@@ -28,7 +28,12 @@ def _find_one(directory: Path, patterns: list[str]) -> Path:
 class SherpaAsr:
     """流式语音识别（partial 中间结果 + endpoint 断句 + final 终稿）。"""
 
-    def __init__(self, model_dir: Path, num_threads: int = 1) -> None:
+    def __init__(
+        self,
+        model_dir: Path,
+        num_threads: int = 1,
+        hotwords_file: Path | None = None,
+    ) -> None:
         import sherpa_onnx
 
         if not model_dir.is_dir():
@@ -55,6 +60,8 @@ class SherpaAsr:
             rule1_min_trailing_silence=1.2,
             rule2_min_trailing_silence=0.8,
             rule3_min_utterance_length=20,
+            **({"hotwords_file": str(hotwords_file), "hotwords_score": 1.5}
+               if hotwords_file and hotwords_file.exists() else {}),
         )
 
     def create_stream(self):
@@ -310,3 +317,33 @@ def build_keywords_txt(
     out_path.write_text(content, encoding="utf-8")
     logger.info("生成 keywords.txt:\n%s", content.strip())
     return out_path
+
+
+class SenseVoiceRefiner:
+    """SenseVoice-small 非流式复核：断句后整句重识别，补标点 + 数字规范化。
+
+    CPU RTF ≈ 0.09（3 秒语音约 0.3 秒），同步调用可接受。
+    """
+
+    def __init__(self, model_dir: Path, num_threads: int = 2) -> None:
+        import numpy as np
+        import sherpa_onnx
+
+        self._np = np
+        model = _find_one(model_dir, ["*model*.int8.onnx", "*model*.onnx"])
+        tokens = model_dir / "tokens.txt"
+        logger.info("加载 SenseVoice 精修模型: %s", model_dir.name)
+        self.recognizer = sherpa_onnx.OfflineRecognizer.from_sensevoice(
+            str(model),
+            str(tokens),
+            num_threads=num_threads,
+            use_itn=True,
+        )
+
+    def refine(self, samples: "np.ndarray") -> str:
+        if samples.size == 0:
+            return ""
+        stream = self.recognizer.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, samples)
+        self.recognizer.decode_stream(stream)
+        return str(self.recognizer.get_result(stream)).strip()

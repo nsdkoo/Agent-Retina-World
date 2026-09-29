@@ -90,6 +90,7 @@ class AudioLoop:
         num_threads: int = 1,
         mic_device=None,
         idle_asr: bool = False,
+        hotwords_file: Path | None = None,
         audio_file: Path | None = None,
     ) -> None:
         self.assistant = assistant
@@ -97,7 +98,9 @@ class AudioLoop:
         self.idle_asr_enabled = idle_asr
         self.audio_file = audio_file
 
-        self.asr = SherpaAsr(asr_model_dir, num_threads=num_threads)
+        self.asr = SherpaAsr(asr_model_dir, num_threads=num_threads, hotwords_file=hotwords_file)
+        self._refiner = None   # SenseVoice 精修器（惰性加载）
+        self._utt_chunks: list = []  # 当前语句的原始采样（供精修复核）
         self.kws = SherpaKws(
             kws_model_dir, keywords_file, threshold=kws_threshold, num_threads=num_threads
         )
@@ -277,6 +280,7 @@ class AudioLoop:
         assert self._asr_stream is not None
         self.asr.accept(self._asr_stream, block)
         self.asr.decode(self._asr_stream)
+        self._utt_chunks.append(block.copy())
 
         partial = self.asr.partial(self._asr_stream)
         now = time.time()
@@ -291,6 +295,26 @@ class AudioLoop:
             text = self.asr.finalize(self._asr_stream).strip()
             self._last_partial = ""
             if text:
+                # SenseVoice 终句精修：整句重识别补标点+数字规范化（CPU ~0.3s）
+                utterance = None
+                if self._utt_chunks:
+                    utterance = np.concatenate(self._utt_chunks)
+                if self._refiner is None and utterance is not None and len(utterance) > SAMPLE_RATE:
+                    try:
+                        from screen_agent.voice.sherpa_engine import SenseVoiceRefiner
+
+                        sv_dir = Path(asr_model_dir).parent / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+                        if sv_dir.is_dir():
+                            self._refiner = SenseVoiceRefiner(sv_dir)
+                    except Exception:
+                        self._refiner = None
+                if self._refiner is not None and utterance is not None:
+                    try:
+                        refined = self._refiner.refine(utterance)
+                        if refined and len(refined) >= len(text) * 0.8:
+                            text = refined
+                    except Exception:
+                        pass
                 self.assistant.emit_transcript(text)
                 self._dispatch_text(text)
             else:
@@ -302,6 +326,7 @@ class AudioLoop:
             self._asr_stream = self.asr.create_stream()
         self.asr.accept(self._asr_stream, block)
         self.asr.decode(self._asr_stream)
+        self._utt_chunks.append(block.copy())
         text = self.asr.partial(self._asr_stream)
         if text and self.assistant.contains_wake_word(text):
             stream = self._asr_stream
@@ -319,6 +344,7 @@ class AudioLoop:
         self.assistant.set_status("listening")
 
     def _refresh_stream(self, replay_ring: bool = False) -> None:
+        self._utt_chunks.clear()
         self._asr_stream = self.asr.create_stream()
         self._last_partial = ""
         if replay_ring:

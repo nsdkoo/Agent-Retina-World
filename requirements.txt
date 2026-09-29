@@ -12,3 +12,5 @@ sounddevice>=0.4.6
 PyQt6>=6.7
 jieba>=0.42.1
 pypinyin>=0.51.0
+edge-tts>=7.0.0
+miniaudio>=1.12

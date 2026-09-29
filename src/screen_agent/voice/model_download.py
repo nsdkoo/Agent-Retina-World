@@ -30,6 +30,22 @@ SHERPA_MODELS: list[dict] = [
         "dir": "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01",
     },
     {
+        "key": "asr_paraformer",
+        "url": (
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+            "sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2"
+        ),
+        "dir": "sherpa-onnx-streaming-paraformer-bilingual-zh-en",
+    },
+    {
+        "key": "sensevoice",
+        "url": (
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
+        ),
+        "dir": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+    },
+    {
         "key": "tts",
         "url": (
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/"

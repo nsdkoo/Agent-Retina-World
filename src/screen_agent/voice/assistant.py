@@ -90,6 +90,9 @@ class VoiceAssistant:
             audio_file=(root / sherpa_cfg["audio_source"])
             if sherpa_cfg.get("audio_source")
             else None,
+            hotwords_file=(root / sherpa_cfg.get("hotwords_file", "data/hotwords.txt"))
+            if Path(root / sherpa_cfg.get("hotwords_file", "data/hotwords.txt")).exists()
+            else None,
         )
 
         tts_engine = sherpa_cfg.get("tts_engine", "sherpa")

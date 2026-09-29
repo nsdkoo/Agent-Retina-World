@@ -67,7 +67,13 @@ class Speaker:
                     self.on_play_end()
 
     def _play(self, text: str) -> None:
-        if self.engine_name == "sherpa" and self.tts_model_dir:
+        if self.engine_name == "edge":
+            try:
+                self._play_edge(text)
+                return
+            except Exception as exc:
+                logger.warning("edge-tts 失败（%s），降级本地播报", exc)
+        if self.engine_name in ("edge", "sherpa") and self.tts_model_dir:
             if self._tts is None:
                 from screen_agent.voice.sherpa_engine import SherpaTts
 
@@ -78,6 +84,31 @@ class Speaker:
             sd.play(samples, sample_rate)
             sd.wait()
             return
+
+    def _play_edge(self, text: str) -> None:
+        """edge-tts 微软自然音色（免费）：合成 mp3 → miniaudio 解码 → 播放。"""
+        import asyncio
+
+        import edge_tts
+        import miniaudio
+
+        async def _synth() -> bytes:
+            com = edge_tts.Communicate(text, voice="zh-CN-XiaoxiaoNeural")
+            chunks = bytearray()
+            async for chunk in com.stream():
+                if chunk["type"] == "audio":
+                    chunks += chunk["data"]
+            return bytes(chunks)
+
+        mp3 = asyncio.run(_synth())
+        decoded = miniaudio.decode(mp3)
+        import numpy as np
+
+        import sounddevice as sd
+
+        samples = np.array(decoded.samples, dtype=np.float32) / 32768.0
+        sd.play(samples, decoded.sample_rate)
+        sd.wait()
 
         if self._pyttsx is None:
             import pyttsx3
