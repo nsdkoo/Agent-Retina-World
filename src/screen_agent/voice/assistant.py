@@ -65,7 +65,17 @@ class VoiceAssistant:
             ]
         ))
         kws_threshold = float(sherpa_cfg.get("kws_threshold", 0.4))
-        build_keywords_txt(keywords, kws_dir, keywords_file, kws_threshold)
+        from screen_agent.voice.sherpa_engine import EN_PHONEMES
+
+        extra_lines: list[str] = []
+        for w in self.wake_names:
+            if w.isascii():
+                for phones in EN_PHONEMES.get(w.lower(), []):
+                    extra_lines.append(f"{' '.join(phones)} @{w}")
+        build_keywords_txt(
+            keywords, kws_dir, keywords_file, kws_threshold,
+            extra_keyword_lines=extra_lines,
+        )
 
         self.audio_loop = AudioLoop(
             self,

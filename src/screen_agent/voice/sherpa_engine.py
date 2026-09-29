@@ -228,11 +228,28 @@ def _token_match(token_set: set[str], token: str) -> str | None:
     return lowered.get(token.lower())
 
 
+# 英文唤醒词 → KWS 音素序列（bilingual 模型 tokens.txt 实测存在；
+# 同一词多变体覆盖不同发音/声调，KWS 命中任一即触发）
+EN_PHONEMES: dict[str, list[list[str]]] = {
+    "rita": [
+        ["R", "ī", "t", "ē"],
+        ["R", "ī", "t", "ā"],
+        ["R", "ī", "t", "ǎ"],
+        ["R", "ī", "t", "à"],
+    ],
+    "reta": [
+        ["R", "ē", "t", "à"],
+        ["R", "ī", "t", "ē"],
+    ],
+}
+
+
 def build_keywords_txt(
     keywords: list[str],
     kws_model_dir: Path,
     out_path: Path,
     threshold: float = 0.4,
+    extra_keyword_lines: list[str] | None = None,
 ) -> Path:
     """把中文唤醒词转成 sherpa KWS keywords.txt（声母+带调韵母 token）。
 
@@ -278,6 +295,15 @@ def build_keywords_txt(
             parts.append(final_tok)
         if parts:
             lines.append(f"{' '.join(parts)} @{word}")
+
+    for line in extra_keyword_lines or []:
+        tokens = line.split("@")[0].split()
+        missing = [tk for tk in tokens if tk not in token_set]
+        if missing:
+            raise ValueError(
+                f"英文唤醒词音素 {missing} 不在 KWS tokens.txt，已拒绝（防静默失灵）"
+            )
+        lines.append(line.strip())
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     content = "\n".join(lines) + "\n"
