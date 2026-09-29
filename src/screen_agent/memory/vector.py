@@ -70,20 +70,34 @@ class MemoryVectors:
             )
 
     def backfill(self, events: list[ActivityEvent], max_new: int = 20) -> int:
-        """空闲期补算缺失向量；单次限量防止唤醒风暴。返回本次补算数。"""
-        done = 0
+        """空闲期补算缺失向量；缺矢量的先收集，一次批量请求（input 数组）。返回本次补算数。"""
+        pending: list[ActivityEvent] = []
         for e in events:
-            if done >= max_new:
+            if len(pending) >= max_new:
                 break
-            if self.has_vector(e.event_id):
-                continue
-            text = f"{e.summary} {e.page_category} {e.user_action}"
-            try:
-                self.upsert(e.event_id, self.embedder.embed(text))
-                done += 1
-            except Exception:
-                continue  # 单条失败跳过，下次空闲重试
-        return done
+            if not self.has_vector(e.event_id):
+                pending.append(e)
+        if not pending:
+            return 0
+        try:
+            from screen_agent.dedup.semantic import embed_batch
+
+            texts = [f"{e.summary} {e.page_category} {e.user_action}" for e in pending]
+            vectors = embed_batch(self.embedder, texts)
+        except Exception:
+            # 批量失败退回逐条（兼容不支持数组批量的端点）
+            done = 0
+            for e in pending:
+                try:
+                    text = f"{e.summary} {e.page_category} {e.user_action}"
+                    self.upsert(e.event_id, self.embedder.embed(text))
+                    done += 1
+                except Exception:
+                    continue
+            return done
+        for e, vec in zip(pending, vectors):
+            self.upsert(e.event_id, vec)
+        return len(pending)
 
     def search(self, query_text: str, top_k: int = 10) -> list[tuple[str, float]]:
         """余弦相似度检索，返回 [(event_id, score 0-1)]。"""

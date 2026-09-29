@@ -6,6 +6,20 @@ from dataclasses import dataclass, field
 import httpx
 
 
+def embed_batch(
+    client: "EmbeddingClient", texts: list[str]
+) -> list[list[float]]:
+    """批量嵌入：OpenAI 兼容 /embeddings 的 input 支持数组，一次请求拿全部向量。"""
+    resp = client._client.post(
+        f"{client.base_url}/embeddings",
+        json={"model": client.model, "input": texts},
+        headers={"Authorization": f"Bearer {client.api_key}"},
+    )
+    resp.raise_for_status()
+    data = sorted(resp.json()["data"], key=lambda d: d["index"])
+    return [list(item["embedding"]) for item in data]
+
+
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
