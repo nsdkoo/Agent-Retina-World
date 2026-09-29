@@ -27,7 +27,7 @@ THEMES = {
         "border": QColor(230, 225, 208, 220),
         "text": QColor("#292620"),
         "bot_bg": QColor(248, 246, 239, 248),
-        "user_bg": QColor(201, 100, 66, 242),
+        "user_bg": QColor(180, 83, 9, 242),
         "user_text": QColor("#ffffff"),
         "info_bg": QColor(233, 239, 224, 246),
         "info_text": QColor("#4f7040"),

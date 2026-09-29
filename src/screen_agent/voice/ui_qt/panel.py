@@ -30,55 +30,55 @@ PANEL_W = 356              # 窗口宽（含投影边距）
 SHADOW_MARGIN = 10
 INPUT_MIN_H = 72
 INPUT_MAX_H = 140          # 约 6 行，备忘录式
-REPLY_MAX_H = 196          # 回复卡限高，超出内部滚动
+REPLY_MAX_H = 420          # 回复区限高（桌面聊天窗惯例：约六成视口高）
 LONG_TEXT_THRESHOLD = 400  # 超过这么多字折叠成 chip
 CHIP_TEMPLATE = "[已粘贴长文 {n} 字 · 回车发送]"
 
 THEMES = {
     "dark": {
-        "panel_top": "#242019",
-        "panel_bottom": "#1c1913",
-        "panel_border": "#3a352b",
-        "panel_border_focus": "#6b5d43",
-        "text": "#f2eee4",
-        "sub": "#a89f8d",
-        "muted": "#7d7464",
-        "reply_bg": "#211d16",
-        "reply_border": "#38322a",
-        "bubble_bot_bg": "#2a251d",
-        "bubble_bot_border": "#3d362b",
+        "panel_top": "#232019",
+        "panel_bottom": "#1b1812",
+        "panel_border": "#3a352a",
+        "panel_border_focus": "#6b5f43",
+        "text": "#f2eee3",
+        "sub": "#a89f8c",
+        "muted": "#7d7463",
+        "reply_bg": "#211d15",
+        "reply_border": "#383226",
+        "bubble_bot_bg": "#2a251c",
+        "bubble_bot_border": "#3d362a",
         "bubble_info_bg": "#25301f",
         "bubble_info_border": "#3a4a30",
         "bubble_info_text": "#a9c79b",
-        "user_bg": "#3a2f22",
-        "user_text": "#f5efe2",
-        "user_line": "#c96442",
-        "marker": "#d97757",
-        "accent": "#d97757",
+        "user_bg": "#3a3020",
+        "user_text": "#f5efe0",
+        "user_line": "#b45309",
+        "marker": "#d97706",
+        "accent": "#d97706",
         "btn_hover_bg": "#35302a",
         "shadow_alpha": 12,
     },
     "light": {
-        "panel_top": "#fbfaf4",
-        "panel_bottom": "#f6f3ea",
-        "panel_border": "#e6e1d0",
-        "panel_border_focus": "#c9bd9c",
-        "text": "#292620",
-        "sub": "#6f695c",
-        "muted": "#948c7b",
-        "reply_bg": "#f1eee3",
-        "reply_border": "#e4dfd0",
-        "bubble_bot_bg": "#efeadf",
-        "bubble_bot_border": "#ddd6c4",
+        "panel_top": "#fafaf7",
+        "panel_bottom": "#f4f2ea",
+        "panel_border": "#e4e1d6",
+        "panel_border_focus": "#c7bf9e",
+        "text": "#2b2721",
+        "sub": "#6f695a",
+        "muted": "#948c78",
+        "reply_bg": "#f1efe5",
+        "reply_border": "#e3e0d3",
+        "bubble_bot_bg": "#efede2",
+        "bubble_bot_border": "#dcd8c8",
         "bubble_info_bg": "#e9efe0",
         "bubble_info_border": "#d2dcc6",
         "bubble_info_text": "#4f7040",
-        "user_bg": "#efe9db",
-        "user_text": "#292620",
-        "user_line": "#c96442",
-        "marker": "#c96442",
-        "accent": "#c96442",
-        "btn_hover_bg": "#efeadd",
+        "user_bg": "#efeadb",
+        "user_text": "#2b2721",
+        "user_line": "#b45309",
+        "marker": "#b45309",
+        "accent": "#b45309",
+        "btn_hover_bg": "#eeebdd",
         "shadow_alpha": 8,
     },
 }
@@ -107,11 +107,11 @@ def build_style(theme: str) -> str:
     selection-background-color: #3b82f6; selection-color: #ffffff;
 }}
 #SendBtn {{
-    color: #ffffff; background: #c96442;
+    color: #ffffff; background: #b45309;
     border: none; border-radius: 14px; font-size: 12px;
     min-width: 44px; max-width: 44px; min-height: 26px; max-height: 26px;
 }}
-#SendBtn:hover {{ background: #d97757; }}
+#SendBtn:hover {{ background: #c86a0d; }}
 #CloseBtn {{
     color: {t['muted']}; background: transparent; border: none;
     font-size: 12px; max-width: 20px; max-height: 20px;
@@ -399,7 +399,12 @@ class ChatPanel(QWidget):
 
         input_row = QHBoxLayout()
         input_row.setSpacing(7)
-        input_row.addWidget(self._dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        # 状态点对齐占位文字第一行（输入区上 padding 14 + 行高一半 ≈ 22）
+        dot_wrap = QVBoxLayout()
+        dot_wrap.setContentsMargins(0, 19, 0, 0)  # 与占位文字首行垂直居中
+        dot_wrap.addWidget(self._dot)
+        dot_wrap.addStretch(1)
+        input_row.addLayout(dot_wrap)
         self._input = InputEdit()
         self._input.submitted.connect(self._submit)
         self._input.escape_pressed.connect(self._handle_escape)

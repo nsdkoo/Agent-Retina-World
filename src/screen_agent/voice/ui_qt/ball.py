@@ -51,8 +51,8 @@ STATE_TUNING = {
 STATE_ACCENTS = {
     "idle": "#9a917f",
     "listening": "#6aa87f",
-    "processing": "#c96442",
-    "speaking": "#d97757",
+    "processing": "#b45309",
+    "speaking": "#d97706",
     "session": "#6aa87f",
 }
 
