@@ -1,0 +1,8 @@
+{
+  "historical_names": [
+    "Agent-Retina-World",
+    "Agent-Retina",
+    "D:\\Agent-Retina"
+  ],
+  "note": "本项目改过两次名（Agent-Retina-World → Agent-Retina → Agent-Rita），旧 plan 里写的是旧名。历史名必须由项目自己声明——做成全局常量会导致跨项目误收（Agent-Rita 的 plan 曾被 hbh-mall 项目收走）。"
+}
