@@ -433,9 +433,30 @@ class QtFloatingBall:
 
             clickable = getattr(top, "action", None)
             hint = "　（点一下执行）" if clickable else ""
+            # 一次最多能出三条建议，但气泡只放得下置信度最高的那条。
+            # **让用户知道还有别的** —— 否则他以为助手只想说这一件事。
+            # 没做成列表是因为气泡本身就是个「一句就走」的载体，
+            # 硬塞多条反而没人看
+            if len(items) > 1:
+                hint += f"　还有 {len(items) - 1} 条"
             toast.show_message(top.render() + hint, "Rita", timeout_ms=8000,
                                anchor=ball_anchor(),
                                on_click=_run if clickable else None)
+
+        def on_foresight(look: dict) -> None:
+            """后果预演：**不可逆的才用警示样式**。
+
+            可逆动作不弹 —— 弹了就人人都是警告，用户对警告脱敏，
+            真正危险的那次反而被忽略。这和「狼来了」是一个道理。
+            """
+            signals.foresight.emit(look)
+            if look.get("reversible", True):
+                return
+            text = look.get("change") or "这一步较难撤销"
+            risks = look.get("risks") or []
+            if risks:
+                text = f"{text}\n{risks[0]}"
+            toast.show_message(text, "Warn", timeout_ms=None, anchor=ball_anchor())
 
         self.assistant.on_transcript(on_transcript)
         self.assistant.on_result(on_result)
@@ -443,6 +464,7 @@ class QtFloatingBall:
         self.assistant.on_options(on_options)
         self.assistant.on_progress(signals.progress.emit)
         self.assistant.on_suggestion(on_suggestion)
+        self.assistant.on_foresight(on_foresight)
 
         def play_start_chain() -> None:
             self.assistant.audio_loop.set_muted_mic()

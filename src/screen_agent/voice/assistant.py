@@ -187,6 +187,7 @@ class VoiceAssistant:
         self._on_options: Callable[[str, list[str]], None] | None = None
         self._pending_options: tuple[str, list[str]] | None = None
         self._on_progress: Callable[[str], None] | None = None
+        self._on_foresight: Callable[[dict], None] | None = None
 
         # ---- 桌面观察：常驻看着你在电脑上做什么，落成可检索的行为日志 ----
         perception_cfg = raw.get("perception", {}) if isinstance(raw.get("perception", {}), dict) else {}
@@ -334,6 +335,14 @@ class VoiceAssistant:
         """
         self._suggestion_cb = cb
 
+    def on_foresight(self, cb: Callable[[dict], None]) -> None:
+        """注册后果预演回调（第五条通道）。
+
+        单独一条路而不是塞进 progress：**它是警示，不是进度**。
+        混在一起用户会当噪音划过去，那这一层就白做了。
+        """
+        self._on_foresight = cb
+
     def run_suggestion(self, suggestion) -> ActionResult | None:  # noqa: ANN001
         """执行一条主动建议（气泡被点击时调）。
 
@@ -414,8 +423,17 @@ class VoiceAssistant:
             self._on_progress(text)
 
     def _on_agent_step(self, event) -> None:  # noqa: ANN001 - agent.events.Event
-        """挂在事件流上的进度上报：Agent 每步结束推一行给 UI。"""
+        """挂在事件流上的上报：进度 + 后果预演。
+
+        **预演结论为什么单独走一条路**：它是「这一步危险，注意」，
+        和「正在执行第 2 步」不是一类信息。混在进度里的话，
+        用户扫一眼就划过去了，起不到警示作用——**那这一层就白做了**。
+        """
         try:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            look = payload.get("foresight")
+            if look and self._on_foresight is not None:
+                self._on_foresight(look)
             self.emit_progress(event.brief())
         except Exception:  # noqa: BLE001 - 进度失败不能影响任务本身
             logger.debug("任务进度上报失败", exc_info=True)

@@ -15,4 +15,7 @@ class AssistantSignals(QObject):
     progress = pyqtSignal(str)      # 任务执行进度：Agent 每步一行，小字显示、不播报
     # 主动建议：助手在用户空闲时主动说的一句（「接着做 X 吗」），不是对提问的回答。
     # 单独一个通道而不是混进 result —— 它不该出现在对话流里
-    suggestion = pyqtSignal(list)   # list[dict]：每条含 kind / what / why
+    suggestion = pyqtSignal(list)   # list[dict]：每条含 kind / what / why / action
+    # 后果预演：动手前的后果（含可逆性与风险）。**单独一条路而不是混进 progress** ——
+    # 它是警示，不是进度；混在一起用户会当噪音划过去，那这一层就白做了
+    foresight = pyqtSignal(dict)    # {tool, goal, change, reversible, risks, ...}

@@ -255,5 +255,72 @@ class ControllerIntegrationTests(unittest.TestCase):
         self.assertTrue(controller.is_waiting, "预演失败却把挂起也带崩了")
 
 
+class ForesightWiringTests(unittest.TestCase):
+    """预演结论要真的送到 UI —— **单独一条路，不能混进进度**。
+
+    混进进度里的话，用户会把「这一步收不回来」当成「正在执行第 2 步」，
+    扫一眼就划过去了。**那这一层就白做了。**
+    """
+
+    def _bare_assistant(self):  # noqa: ANN202
+        """绕过 __init__ 造一个最小 assistant（只为测事件转发）。"""
+        from screen_agent.voice.assistant import VoiceAssistant
+
+        obj = VoiceAssistant.__new__(VoiceAssistant)
+        obj._on_foresight = None
+        obj._on_progress = None
+        return obj
+
+    @staticmethod
+    def _event(payload: dict):  # noqa: ANN205
+        class _E:
+            brief = staticmethod(lambda: "第 1 步 · 关掉 Word")
+
+        e = _E()
+        e.payload = payload
+        return e
+
+    def test_forwards_foresight_from_event(self) -> None:
+        got: list[dict] = []
+        assistant = self._bare_assistant()
+        assistant._on_foresight = got.append
+        assistant._on_agent_step(self._event(
+            {"foresight": {"change": "关闭 Word", "reversible": False}}
+        ))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["change"], "关闭 Word")
+
+    def test_no_foresight_in_payload_is_silent(self) -> None:
+        """普通步骤事件（没有预演）不该触发警示通道。"""
+        got: list[dict] = []
+        assistant = self._bare_assistant()
+        assistant._on_foresight = got.append
+        assistant._on_agent_step(self._event({"result": "ok"}))
+        self.assertEqual(got, [])
+
+    def test_no_subscriber_does_not_crash(self) -> None:
+        """没注册回调时也不能炸——UI 可能还没起来。"""
+        assistant = self._bare_assistant()
+        assistant._on_agent_step(self._event(
+            {"foresight": {"change": "x", "reversible": False}}
+        ))
+
+    def test_progress_still_emitted_alongside(self) -> None:
+        """进度不能被预演挤掉——两条路各走各的。"""
+        progress: list[str] = []
+        assistant = self._bare_assistant()
+        assistant._on_progress = progress.append
+        assistant._on_agent_step(self._event(
+            {"foresight": {"change": "x", "reversible": False}}
+        ))
+        self.assertEqual(len(progress), 1)
+
+    def test_malformed_payload_does_not_crash(self) -> None:
+        """payload 结构不对时不能把任务带崩——上报是附属功能。"""
+        assistant = self._bare_assistant()
+        assistant._on_agent_step(self._event({}))
+        assistant._on_agent_step(self._event({"foresight": None}))
+
+
 if __name__ == "__main__":
     unittest.main()

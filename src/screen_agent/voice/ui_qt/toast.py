@@ -31,6 +31,11 @@ THEMES = {
         "user_text": QColor("#ffffff"),
         "info_bg": QColor(233, 239, 224, 246),
         "info_text": QColor("#4f7040"),
+        # 警示（不可逆动作的后果预演）。用暖橙红而不是正红：
+        # 正红在浅色桌面上太刺眼，看两次就想关掉提醒；
+        # 暖色既读得出「注意」，又不至于让人烦
+        "warn_bg": QColor(253, 237, 227, 248),
+        "warn_text": QColor("#9a3412"),
         "shadow": 7,
     },
     "dark": {
@@ -42,6 +47,9 @@ THEMES = {
         "user_text": QColor("#ffffff"),
         "info_bg": QColor(37, 48, 31, 240),
         "info_text": QColor("#a9c79b"),
+        # 警示：深色主题下用低饱和暖橙，亮度和背景拉开但不刺眼
+        "warn_bg": QColor(58, 36, 26, 244),
+        "warn_text": QColor("#f0a882"),
         "shadow": 12,
     },
 }
@@ -214,6 +222,11 @@ class BubbleToast(QWidget):
             fill, border, text_color = t["user_bg"], t["user_bg"], t["user_text"]
         elif self._kind == "Info":
             fill, border, text_color = t["info_bg"], t["info_bg"], t["info_text"]
+        elif self._kind == "Warn":
+            # 不可逆动作的后果预演走这里。**和 Info 分开**是有意的：
+            # 「顺手提一句」和「这一步收不回来」放在同一个样式里，
+            # 用户会把两者都当成可忽略的提示
+            fill, border, text_color = t["warn_bg"], t["warn_bg"], t["warn_text"]
         else:
             fill, border, text_color = t["bot_bg"], t["border"], t["text"]
 
