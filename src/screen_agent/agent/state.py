@@ -24,6 +24,11 @@ class TaskState(str, Enum):
     AWAITING_USER_INPUT = "awaiting_input"
     FINISHED = "finished"
     REJECTED = "rejected"
+    # 和 REJECTED / STOPPED 区分开：
+    #   REJECTED  = 在门口就被拒（挂起时用户说不做）
+    #   STOPPED   = 系统主动停机（迭代上限等）
+    #   CANCELLED = 任务已经跑起来了，用户中途把它叫停
+    CANCELLED = "cancelled"
     ERROR = "error"
     STOPPED = "stopped"
 
@@ -45,12 +50,18 @@ _ALLOWED: dict[TaskState, set[TaskState]] = {
     },
     TaskState.RUNNING: {
         TaskState.PLANNING, TaskState.AWAITING_USER_CONFIRMATION, TaskState.AWAITING_USER_INPUT,
-        TaskState.FINISHED, TaskState.REJECTED, TaskState.ERROR, TaskState.STOPPED,
+        TaskState.FINISHED, TaskState.REJECTED, TaskState.CANCELLED,
+        TaskState.ERROR, TaskState.STOPPED,
     },
-    TaskState.AWAITING_USER_CONFIRMATION: {TaskState.RUNNING, TaskState.REJECTED, TaskState.STOPPED},
-    TaskState.AWAITING_USER_INPUT: {TaskState.RUNNING, TaskState.STOPPED},
+    TaskState.AWAITING_USER_CONFIRMATION: {
+        TaskState.RUNNING, TaskState.REJECTED, TaskState.CANCELLED, TaskState.STOPPED,
+    },
+    TaskState.AWAITING_USER_INPUT: {
+        TaskState.RUNNING, TaskState.CANCELLED, TaskState.STOPPED,
+    },
     TaskState.FINISHED: set(),
     TaskState.REJECTED: set(),
+    TaskState.CANCELLED: set(),      # 终态：用户中途叫停，不再往下走
     TaskState.ERROR: {TaskState.PLANNING, TaskState.RUNNING, TaskState.STOPPED},
     TaskState.STOPPED: {TaskState.PLANNING, TaskState.RUNNING},
 }
@@ -271,4 +282,6 @@ class AgentState:
             return f"任务中断：{self.error or '未知错误'}（已完成 {done}/{total} 步）"
         if self.state == TaskState.REJECTED:
             return f"好，已取消（当时走到 {done}/{total} 步）"
+        if self.state == TaskState.CANCELLED:
+            return f"好，停下了（已做完 {done}/{total} 步）"
         return f"{self.state.value} · {done}/{total} 步"

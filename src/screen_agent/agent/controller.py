@@ -18,8 +18,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime
 
 from screen_agent.agent.events import Event, EventStream, EventType
@@ -53,6 +54,7 @@ class AgentController:
         max_iterations: int = 8,
         max_parallel: int = 3,
         max_step_repeats: int = 2,
+        step_timeout: float = 0.0,
     ) -> None:
         self.registry = registry
         self.planner = planner
@@ -62,10 +64,14 @@ class AgentController:
         self.max_iterations = max_iterations
         self.max_parallel = max_parallel
         self.max_step_repeats = max_step_repeats
+        self.step_timeout = step_timeout
 
         self._state: AgentState | None = None
         self._seen: dict[str, int] = {}       # (tool, params) → 出现次数，防原地打转
         self._follow_ups: deque[str] = deque()  # Pi 式 Follow-up：做完了接着做
+        # 协作式取消令牌。Python 没法强杀线程，只能把令牌立起来、
+        # 在**步边界**检查——所以取消不是即时的，是"这一步跑完就停"
+        self._cancel = threading.Event()
 
     # ---- 只读视图 ----
 
@@ -120,6 +126,7 @@ class AgentController:
 
         self._state = state
         self._rehearse(state)
+        self._cancel.clear()      # 续跑是新的一次执行，别带着上次的取消令牌
         self._publish(
             EventType.USER_MESSAGE,
             {"text": f"（续跑）{state.goal}", "resume": True},
@@ -186,6 +193,7 @@ class AgentController:
         state = AgentState(goal=goal)
         self._state = state
         self._seen.clear()
+        self._cancel.clear()
         self._publish(EventType.USER_MESSAGE, {"text": goal}, state)
 
         self._transition(state, TaskState.PLANNING)
@@ -220,6 +228,9 @@ class AgentController:
         state = self._state
         assert state is not None
         while True:
+            # 取消只在**步边界**生效：当前这步已经发出去了，硬切会把副作用留在半路
+            if self._cancel.is_set():
+                return self._cancel_run()
             step = state.current_step()
             if step is None:
                 return self._finish()
@@ -323,11 +334,44 @@ class AgentController:
         self._publish(EventType.ACTION, {
             "goal": step.goal, "tool": step.tool, "params": step.params, "why": step.why,
         }, self._state, step.index + 1)
+        if self.step_timeout and self.step_timeout > 0:
+            return self._invoke_with_timeout(step)
         try:
             return self.registry.run(step.tool, **step.params)
         except Exception as exc:  # noqa: BLE001 - 工具层异常统一转成失败观察
             logger.exception("工具执行异常：%s", step.tool)
             return ActionResult(success=False, message=f"执行失败：{exc}")
+
+    def _invoke_with_timeout(self, step) -> ActionResult:
+        """带超时执行一步。
+
+        **局限要说清楚**：Python 杀不掉线程，这里的超时只是"不再等它"，
+        底层那次调用可能还在跑（孤儿线程）。所以默认是关的（`step_timeout=0`），
+        能用工具自带超时的（比如 `shell.run` 的 `timeout` 参数）优先用工具自己的。
+
+        因为副作用状态未知，超时的错误分类按工具是否幂等来分：
+        只读超时归 `retryable`（重跑无害），写操作归 `timeout_unknown`
+        （**不能被当成普通失败重试**——它可能已经改了东西）。
+        """
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = pool.submit(self.registry.run, step.tool, **step.params)
+            return future.result(timeout=self.step_timeout)
+        except FutureTimeout:
+            spec = self.registry.get(step.tool)
+            idempotent = bool(spec is not None and spec.idempotent)
+            return ActionResult(
+                success=False,
+                message=f"这步超过 {self.step_timeout:g} 秒还没返回，先不等了",
+                detail={"timeout": True, "tool": step.tool},
+                error_kind="retryable" if idempotent else "timeout_unknown",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("工具执行异常：%s", step.tool)
+            return ActionResult(success=False, message=f"执行失败：{exc}")
+        finally:
+            # wait=False：不等可能还活着的孤儿线程，否则超时形同虚设
+            pool.shutdown(wait=False)
 
     def _settle(self, step, result: ActionResult) -> None:
         step.ended_at = datetime.now()
@@ -415,14 +459,44 @@ class AgentController:
             self._follow_ups.append(text.strip())
 
     def cancel(self) -> ActionResult:
+        """用户中途叫停。
+
+        分两种情况，语义不同：
+        - **挂起中**（在门口等确认）→ 直接判 REJECTED，任务从没真正跑起来
+        - **运行中** → 立起取消令牌，等当前步跑完在边界处停，状态进 CANCELLED
+
+        运行中的取消不是即时的——Python 杀不掉线程，硬切会把写到一半的副作用留下。
+        """
         state = self._state
-        if state is None or not self.is_waiting:
-            return ActionResult(success=False, message="现在没有等你拍板的任务")
-        self._mark_waiting_step_as_skipped()
-        self._transition(state, TaskState.REJECTED)
+        if state is None:
+            return ActionResult(success=False, message="现在没有在跑的任务")
+
+        if self.is_waiting:
+            self._mark_waiting_step_as_skipped()
+            self._transition(state, TaskState.REJECTED)
+            self._persist(state)
+            self._publish(EventType.FINISH, {"summary": state.summary()}, state)
+            return ActionResult(success=True, message=state.summary())
+
+        if self.is_running:
+            self._cancel.set()
+            return ActionResult(success=True, message="好，这一步跑完就停")
+
+        return ActionResult(success=False, message="现在没有在跑的任务")
+
+    def _cancel_run(self) -> ActionResult:
+        """在步边界把任务停下。当前步标成跳过并说明是用户叫停的，不是失败。"""
+        state = self._state
+        assert state is not None
+        step = state.current_step()
+        if step is not None and step.status in (StepStatus.PENDING, StepStatus.RUNNING):
+            self._mark(step, StepStatus.SKIPPED, "你叫停了，这步没做", False)
+            state.cursor += 1
+        self._transition(state, TaskState.CANCELLED)
         self._persist(state)
-        self._publish(EventType.FINISH, {"summary": state.summary()}, state)
-        return ActionResult(success=True, message=state.summary())
+        summary = state.summary()
+        self._publish(EventType.FINISH, {"summary": summary, "cancelled": True}, state)
+        return ActionResult(success=False, message=summary, detail={"cancelled": True})
 
     # ---- 收尾 ----
 
