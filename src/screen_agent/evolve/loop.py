@@ -236,8 +236,12 @@ class Evolver:
         if self.evaluator.privacy is not None:
             expected, predicted = [], []
             for case in self.golden.privacy:
-                allowed, _ = self.evaluator.privacy.verdict(case.title, case.process, case.texts)
-                expected.append(not allowed)
+                allowed, _ = self.evaluator.privacy.verdict(
+                    case.title, case.process, case.texts
+                )
+                # 期望取自黄金集标注，**不能拿判定结果自己当期望**——那样 expected 恒等于
+                # predicted，漏放数永远 0、recall 永远 1.0，第三条采纳红线形同虚设（踩过）
+                expected.append(bool(getattr(case, "expect_blocked", False)))
                 predicted.append(not allowed)
             from screen_agent.eval.metrics import gate_report
 

@@ -1,0 +1,89 @@
+{
+  "dataset_version": "1.0",
+  "system_version": "perception-1.3",
+  "ran_at": "2026-09-30T11:04:53",
+  "mode": "rules",
+  "metrics": {
+    "activity_accuracy": 0.7255,
+    "activity_macro_f1": 0.6871,
+    "privacy_recall": 1.0,
+    "privacy_precision": 1.0
+  },
+  "latency_ms": {
+    "p50": 0.0,
+    "p95": 0.0,
+    "mean": 0.0
+  },
+  "errors": [
+    {
+      "case": "a21",
+      "expect": "coding",
+      "got": "other"
+    },
+    {
+      "case": "a04",
+      "expect": "writing",
+      "got": "meeting"
+    },
+    {
+      "case": "a25",
+      "expect": "writing",
+      "got": "other"
+    },
+    {
+      "case": "a27",
+      "expect": "writing",
+      "got": "coding"
+    },
+    {
+      "case": "a08",
+      "expect": "reading",
+      "got": "browsing"
+    },
+    {
+      "case": "a09",
+      "expect": "reading",
+      "got": "browsing"
+    },
+    {
+      "case": "a32",
+      "expect": "reading",
+      "got": "coding"
+    },
+    {
+      "case": "a34",
+      "expect": "reading",
+      "got": "writing"
+    },
+    {
+      "case": "a35",
+      "expect": "reading",
+      "got": "chatting"
+    },
+    {
+      "case": "a36",
+      "expect": "reading",
+      "got": "browsing"
+    },
+    {
+      "case": "a45",
+      "expect": "idle",
+      "got": "other"
+    },
+    {
+      "case": "a47",
+      "expect": "other",
+      "got": "writing"
+    },
+    {
+      "case": "a49",
+      "expect": "other",
+      "got": "coding"
+    },
+    {
+      "case": "a50",
+      "expect": "coding",
+      "got": "browsing"
+    }
+  ]
+}

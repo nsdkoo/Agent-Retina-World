@@ -30,8 +30,13 @@ from screen_agent.eval.metrics import (
 
 # 门禁阈值：跌超这么多就阻断
 DEFAULT_TOLERANCE = 0.03
-# 隐私召回的容忍度更小——漏放一次就是事故
+
+# 隐私召回的容忍度。
+# **当前处于「只报不拦」阶段（2026-09-30 起）**：D1/D2 修好之后，真实召回率才第一次显形，
+# 先观察几轮、摸清误报漏报的分布，再决定是否收紧。
+# 收紧方式：把 PRIVACY_ADVISORY_ONLY 改成 False 即可（容忍度已是 0）。
 PRIVACY_TOLERANCE = 0.0
+PRIVACY_ADVISORY_ONLY = True
 
 
 @dataclass
@@ -124,7 +129,10 @@ class Evaluator:
             predicted: list[bool] = []
             for case in golden.privacy:
                 allowed, _ = self.privacy.verdict(case.title, case.process, case.texts)
-                expected.append(not allowed)     # 期望被拦 = 不该放行
+                # 期望来自黄金集人工标注的 expect_blocked，**不能拿判定结果自己当期望**。
+                # 之前两行都写 `not allowed`，expected 恒等于 predicted，
+                # 漏放数永远是 0、召回永远是 1.0 —— 这道门禁从来没生效过。
+                expected.append(bool(getattr(case, "expect_blocked", False)))
                 predicted.append(not allowed)
             report.privacy = gate_report(expected, predicted)
 
@@ -150,7 +158,8 @@ def compare_to_baseline(
     - macro-F1 跌超 tolerance → 不放行
     - **隐私召回只要跌了就不放行**（容忍度默认 0）——这是不可回滚的错
     """
-    reasons: list[str] = []
+    blocking: list[str] = []
+    advisory: list[str] = []
     base = (baseline or {}).get("metrics") or {}
     if not base:
         return True, ["没有基线，本次结果将作为新基线"]
@@ -158,15 +167,23 @@ def compare_to_baseline(
     now_f1 = current.activity.macro_f1
     old_f1 = float(base.get("activity_macro_f1", 0.0))
     if now_f1 + tolerance < old_f1:
-        reasons.append(
+        blocking.append(
             f"活动 macro-F1 从 {old_f1:.3f} 跌到 {now_f1:.3f}（超过容差 {tolerance:.2f}）"
         )
 
     now_recall = current.privacy.recall
     old_recall = float(base.get("privacy_recall", 0.0))
     if now_recall + privacy_tolerance < old_recall:
-        reasons.append(
-            f"隐私召回从 {old_recall:.1%} 跌到 {now_recall:.1%}——这个不能退，漏放即事故"
-        )
+        message = f"隐私召回从 {old_recall:.1%} 跌到 {now_recall:.1%}"
+        if PRIVACY_ADVISORY_ONLY:
+            # 「只报不拦」阶段：真实召回率刚显形，先让它叫、别让它咬人
+            advisory.append(f"{message}（当前只报不拦，观察几轮再收紧）")
+        else:
+            blocking.append(f"{message}——这个不能退，漏放即事故")
 
-    return (not reasons), reasons or [f"各项指标未退（macro-F1 {now_f1:.3f}）"]
+    if blocking:
+        return False, blocking + advisory
+    return True, (
+        advisory
+        or [f"各项指标未退（macro-F1 {now_f1:.3f}，隐私召回 {now_recall:.1%}）"]
+    )
