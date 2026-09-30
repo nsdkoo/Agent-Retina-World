@@ -238,10 +238,28 @@ class DesktopWatcher:
 
         event.url = extract_url(event.texts, event.ocr_text)
 
-        if self.privacy.looks_sensitive(" ".join(event.texts[:50]) + event.ocr_text):
+        # 内容敏感：**任一路命中就两路都清**。
+        # UIA 文本和 OCR 文本读的是同一块屏幕，只清其中一路等于没清——
+        # 这里是安全性优先的地方，细粒度没有意义。
+        # 但走 evaluate 能拿到"是哪一路触发的"，排查时比一句笼统的"内容疑似敏感"有用得多。
+        decision = self.privacy.evaluate(
+            event.window_title, event.process_name, event.texts,
+            ocr_text=event.ocr_text, moment=event.ts,
+        )
+
+        def _blocked(name: str) -> bool:
+            verdict = decision.channel(name)
+            return verdict is not None and not verdict.allowed
+
+        a11y_blocked, ocr_blocked = _blocked("a11y_text"), _blocked("ocr_text")
+        if a11y_blocked or ocr_blocked:
             event.texts = []
             event.ocr_text = ""
-            event.skip_reason = "内容疑似敏感"
+            trigger = "、".join(
+                label for label, hit in (("无障碍文本", a11y_blocked), ("OCR 文本", ocr_blocked))
+                if hit
+            )
+            event.skip_reason = f"内容疑似敏感（{trigger}）"
 
         # 类型化理解：判断「他在干什么」。用小分类器而不是大模型——
         # 实测 Jev/Laya 常驻内存后单次判断约 0.05 秒，比采集本身还便宜

@@ -50,6 +50,9 @@ class PrivacyCase:
 
     隐私用例的指标是**召回率**而不是准确率：漏放一次就是事故，
     误拦一次只是少记一条。两者的代价完全不对称。
+
+    `channel_expectations` 表达通道级期望：`{"a11y_text": False}` 表示
+    "这一条不该跳过整条记录，但正文不能留"。留空则只看 `expect_blocked` 的整体结论。
     """
 
     case_id: str
@@ -59,6 +62,10 @@ class PrivacyCase:
     texts: list[str] = field(default_factory=list)
     pool: str = "anchor"
     note: str = ""
+    # ↓ 新增字段一律放末尾：SEED_PRIVACY 是位置参数构造的，
+    #   插在中间会让后面所有参数错位（这个坑刚踩过）
+    ocr_text: str = ""
+    channel_expectations: dict[str, bool] = field(default_factory=dict)
 
     def to_row(self) -> dict:
         return asdict(self)
@@ -218,6 +225,19 @@ SEED_PRIVACY: tuple[PrivacyCase, ...] = (
                 "rolling"),
     PrivacyCase("p20", "终端", "WindowsTerminal.exe", False, ["git status On branch main"],
                 "rolling", "终端命令不该拦"),
+    # ↓ 通道级期望：这几条的重点不是"整条拦不拦"，而是"**哪一部分**该拦"。
+    #   旧版只能给二值结论，这些用例根本没法表达。
+    PrivacyCase("p21", "main.py - Visual Studio Code", "编辑器", True,
+                ["sk-abcdef1234567890abcdef1234567890"], "challenge",
+                "只该拦正文；标题和骨架可以留",
+                channel_expectations={"a11y_text": False, "window_meta": True, "event": True}),
+    PrivacyCase("p22", "1Password - 保险库", "1password.exe", True, [], "challenge",
+                "私密窗口：连骨架和标题都不留",
+                channel_expectations={"event": False, "window_meta": False}),
+    PrivacyCase("p23", "记事本", "notepad.exe", True, ["普通笔记内容"], "challenge",
+                "卡号出现在 OCR 文本里，该拦的是 OCR 通道",
+                ocr_text="6222 0212 3456 7890",
+                channel_expectations={"ocr_text": False, "a11y_text": True}),
 )
 
 

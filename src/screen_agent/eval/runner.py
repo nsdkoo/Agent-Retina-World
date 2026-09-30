@@ -48,6 +48,9 @@ class EvalReport:
     activity: ClassificationReport = field(default_factory=ClassificationReport)
     privacy: GateReport = field(default_factory=GateReport)
     latency_ms: dict[str, float] = field(default_factory=dict)
+    # 通道级准确率：只在样本显式声明了 channel_expectations 时才有值
+    channel_accuracy: float = 0.0
+    channel_checked: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +63,8 @@ class EvalReport:
                 "activity_macro_f1": round(self.activity.macro_f1, 4),
                 "privacy_recall": round(self.privacy.recall, 4),
                 "privacy_precision": round(self.privacy.precision, 4),
+                "channel_accuracy": round(self.channel_accuracy, 4),
+                "channel_checked": self.channel_checked,
             },
             "latency_ms": self.latency_ms,
             "errors": [
@@ -127,14 +132,44 @@ class Evaluator:
         if self.privacy is not None:
             expected: list[bool] = []
             predicted: list[bool] = []
+            channel_checked = 0
+            channel_correct = 0
             for case in golden.privacy:
-                allowed, _ = self.privacy.verdict(case.title, case.process, case.texts)
+                texts = list(getattr(case, "texts", None) or [])
+                # 优先用通道级的 evaluate；只实现了旧 verdict 的闸门也能跑——
+                # verdict 目前仍被实测脚本等地方依赖，不该强制所有调用方升级
+                if hasattr(self.privacy, "evaluate"):
+                    decision = self.privacy.evaluate(
+                        case.title, case.process, texts,
+                        ocr_text=getattr(case, "ocr_text", ""),
+                    )
+                    allowed = decision.allowed
+                else:
+                    allowed, _ = self.privacy.verdict(case.title, case.process, texts)
+                    decision = None
+
                 # 期望来自黄金集人工标注的 expect_blocked，**不能拿判定结果自己当期望**。
                 # 之前两行都写 `not allowed`，expected 恒等于 predicted，
                 # 漏放数永远是 0、召回永远是 1.0 —— 这道门禁从来没生效过。
                 expected.append(bool(getattr(case, "expect_blocked", False)))
                 predicted.append(not allowed)
+
+                # 通道级期望：只在样本显式声明且闸门支持时才算，避免把分母灌大
+                if decision is None:
+                    continue
+                for channel, should_allow in (
+                    getattr(case, "channel_expectations", None) or {}
+                ).items():
+                    verdict = decision.channel(channel)
+                    if verdict is None:
+                        continue
+                    channel_checked += 1
+                    if verdict.allowed == bool(should_allow):
+                        channel_correct += 1
             report.privacy = gate_report(expected, predicted)
+            if channel_checked:
+                report.channel_accuracy = channel_correct / channel_checked
+                report.channel_checked = channel_checked
 
         if durations:
             ordered = sorted(durations)
