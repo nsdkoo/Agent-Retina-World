@@ -50,6 +50,7 @@ THEMES = {
         "bubble_info_bg": "#25301f",
         "bubble_info_border": "#3a4a30",
         "bubble_info_text": "#a9c79b",
+        "warn_text": "#f0a882",
         "user_bg": "#3a3020",
         "user_text": "#f5efe0",
         "user_line": "#b45309",
@@ -73,6 +74,9 @@ THEMES = {
         "bubble_info_bg": "#e9efe0",
         "bubble_info_border": "#d2dcc6",
         "bubble_info_text": "#4f7040",
+        # 警示（不可逆动作的后果预演）。用深橙红而非正红——
+        # 正红在浅色底上太跳，看两次就烦；暖色够醒目又不刺眼
+        "warn_text": "#9a3412",
         "user_bg": "#efeadb",
         "user_text": "#2b2721",
         "user_line": "#b45309",
@@ -159,6 +163,13 @@ def build_bubble_style(kind: str, theme: str) -> str:
         return (
             f"QLabel {{ color: {t['muted']}; font-size: 11px; padding: 2px 0;"
             " background: transparent; margin: 0 4px; }"
+        )
+    if kind == "Warn":
+        # 不可逆动作的后果预演。和 Info 分开——「顺手提一句」跟「这一步收不回来」
+        # 长得一样的话，用户会把两者都当可忽略的提示
+        return (
+            f"QLabel {{ color: {t['warn_text']}; font-size: 11px; font-weight: 600;"
+            " padding: 2px 0; background: transparent; margin: 0 4px; }"
         )
     return (
         f"QLabel {{ color: {t['text']}; font-size: 12px; padding: 3px 0;"
@@ -451,6 +462,8 @@ class ChatPanel(QWidget):
         signals.result.connect(self._on_result_text)
         signals.prompt.connect(self._on_prompt)
         signals.progress.connect(self._on_progress)
+        signals.suggestion.connect(self._on_suggestion)
+        signals.foresight.connect(self._on_foresight)
 
         self._reply_visible = False
         self._activity_visible = False
@@ -614,6 +627,38 @@ class ChatPanel(QWidget):
     def _on_progress(self, text: str) -> None:
         """任务执行进度：走 Info 气泡（灰色小字），不抢正文位置、不播报。"""
         self.add_info(text)
+
+    def _on_suggestion(self, items: list) -> None:
+        """主动建议：**全部列出来**，不只显示第一条。
+
+        面板和气泡分工不同 —— 气泡是「弹一下就走」，只放得下置信度最高的那条；
+        面板是「回头看的地方」，滚回来时应该看到全部，以及**每条为什么被提出来**。
+
+        这是气泡那个「还有 N 条」提示的落点。
+        """
+        for item in items or []:
+            what = (item or {}).get("what") or ""
+            if not what:
+                continue
+            why = (item or {}).get("why") or ""
+            hint = "（可点击执行）" if (item or {}).get("action") else ""
+            text = f"{what}{hint}" + (f"\n{why}" if why else "")
+            self.add_bubble(text, "Info")
+
+    def _on_foresight(self, look: dict) -> None:
+        """后果预演：**面板里留一条**，别只在气泡闪一下就没了。
+
+        尤其不可逆的那次 —— 用户当时可能没看清气泡，回头看的时候得能找着。
+        """
+        change = (look or {}).get("change") or ""
+        if not change:
+            return
+        reversible = (look or {}).get("reversible", True)
+        risks = (look or {}).get("risks") or []
+        text = f"{'可撤销' if reversible else '较难撤销'}：{change}"
+        if risks:
+            text += f"\n{risks[0]}"
+        self.add_bubble(text, "Info" if reversible else "Warn")
 
     def _on_prompt(self, question: str, options: list) -> None:
         """正文已经由 result 渲染过了，这里只负责把候选按钮摆出来。"""
