@@ -37,6 +37,10 @@ _CONFIRM_WORDS = ("继续", "确认", "执行", "可以", "好", "是的", "对"
 _SKIP_WORDS = ("跳过", "略过", "下一步", "不管这步", "略")
 _CANCEL_WORDS = ("取消", "算了", "不做了", "不做", "停", "别做", "放弃", "不用了")
 
+# 已经真正结束、不该再续跑的状态。这是 trajectory 里 `_UNFINISHED` 的补集——
+# ERROR 不在其中：它是可以续的（问题解决了就能接着跑）。
+_TERMINAL = {TaskState.FINISHED, TaskState.REJECTED, TaskState.STOPPED}
+
 
 class AgentController:
     def __init__(
@@ -97,6 +101,86 @@ class AgentController:
                 options=tail.options,
             )
         return result
+
+    # ---- 续跑（跨进程） ----
+
+    def resume_from(self, task_id: str) -> ActionResult | None:
+        """把库里没跑完的任务读回来接着跑。
+
+        对标 LangGraph 的 `Command(resume=...)`：状态外部化之后，恢复不需要
+        原来是哪个进程——新进程拿着 task_id 就能接上。
+
+        返回 None 表示任务不存在或已经结束了。
+        """
+        if self.trajectory is None:
+            return None
+        state = self.trajectory.load(task_id)
+        if state is None or state.state in _TERMINAL:
+            return None
+
+        self._state = state
+        self._rehearse(state)
+        self._publish(
+            EventType.USER_MESSAGE,
+            {"text": f"（续跑）{state.goal}", "resume": True},
+            state,
+        )
+
+        # 挂起态：把问题重新抛给用户，**不自动往下执行**——
+        # 上次就是需要确认才停下的，重启不该被当成"默认同意"
+        if state.state in (
+            TaskState.AWAITING_USER_CONFIRMATION, TaskState.AWAITING_USER_INPUT,
+        ):
+            return self._resume_pending_ask(state)
+
+        if state.state is not TaskState.RUNNING:
+            self._transition(state, TaskState.RUNNING)
+            if state.state is not TaskState.RUNNING:
+                # 状态机不允许（比如库里的状态已经和 steps 对不上）：
+                # 以"能继续干活"为准，不因为一个状态名把任务判死
+                state.state = TaskState.RUNNING
+        self._persist(state)
+        return self._advance()
+
+    def _rehearse(self, state: AgentState) -> None:
+        """恢复现场：重建打转检测表，并处理崩溃时留下的残步。
+
+        **残步是这里最需要小心的地方**——进程是在某一步执行到一半时被杀的，
+        那一步到底做没做成功是未知的：
+        - 幂等工具（纯读）→ 重跑没有风险，重置回 PENDING
+        - 非幂等工具（写）→ **绝不重跑**，如实记失败并跳过。
+          宁可少做一步，也不能因为"重试"把文件移两次。
+        """
+        self._seen.clear()
+        for step in state.steps:
+            if step.status in (StepStatus.DONE, StepStatus.FAILED, StepStatus.SKIPPED):
+                signature = self._signature(step)
+                self._seen[signature] = self._seen.get(signature, 0) + 1
+
+        current = state.current_step()
+        if current is None or current.status is not StepStatus.RUNNING:
+            return
+        spec = self.registry.get(current.tool)
+        if spec is not None and spec.idempotent:
+            current.status = StepStatus.PENDING
+            current.observation = ""
+        else:
+            self._mark(
+                current, StepStatus.FAILED,
+                "上次执行到一半就中断了，结果未知，没有重跑", False,
+            )
+            state.cursor += 1
+
+    def _resume_pending_ask(self, state: AgentState) -> ActionResult:
+        """重启后把挂起的问题重新抛一遍（不自动执行）。"""
+        step = state.current_step()
+        if step is None:
+            state.fail("挂起的步骤已经不在了")
+            self._persist(state)
+            return ActionResult(success=False, message="这个任务的状态对不上，我给它标成中断了")
+        return self._suspend(step, "上次就是卡在这一步等你确认（重启后续跑）")
+
+    # ---- 主循环 ----
 
     def _run_once(self, goal: str) -> ActionResult:
         state = AgentState(goal=goal)
@@ -372,6 +456,10 @@ class AgentController:
             self.trajectory.log_event(event)
 
     def _transition(self, state: AgentState, target: TaskState) -> None:
+        if state.state is target:
+            # 原地不动不算迁移。续跑挂起任务时会再抛一次同样的问，
+            # 那时状态本来就是 AWAITING，不该被当成非法跳转刷一堆警告
+            return
         try:
             previous, current = state.transition(target)
         except Exception:  # noqa: BLE001 - 非法跳转不该掀翻主循环

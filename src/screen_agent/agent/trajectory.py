@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS steps (
     observation TEXT,
     success     INTEGER DEFAULT 0,
     elapsed_ms  INTEGER DEFAULT 0,
+    started_at  TEXT,
+    ended_at    TEXT,
     PRIMARY KEY (task_id, idx)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -66,6 +68,30 @@ _UNFINISHED = (
     TaskState.ERROR.value,
 )
 
+# 给既有库补列。原来 steps 表只存 `elapsed_ms` 不存起止时间，
+# 于是读回来的任务耗时信息是死的（`elapsed_ms` 算不出来）、也无法用 from_dict 还原。
+# 加列是幂等的：已经有的列会报 duplicate column，忽略即可，新老库共用同一份代码。
+_MIGRATIONS = (
+    "ALTER TABLE steps ADD COLUMN started_at TEXT",
+    "ALTER TABLE steps ADD COLUMN ended_at TEXT",
+)
+
+
+def _safe_params(raw: str | None) -> dict:
+    """解析 params。一条脏数据不该让整个任务恢复不了，所以失败就返回空 dict。"""
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _column(row: sqlite3.Row, name: str) -> str | None:
+    """读可能不存在的列——老库在迁移之前没有 started_at / ended_at。"""
+    return row[name] if name in row.keys() else None
+
 
 class TrajectoryStore:
     def __init__(self, db_path: Path) -> None:
@@ -73,6 +99,11 @@ class TrajectoryStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            for statement in _MIGRATIONS:
+                try:
+                    conn.execute(statement)
+                except sqlite3.OperationalError:
+                    pass    # 列已存在，跳过
 
     @contextmanager
     def _connect(self):
@@ -110,13 +141,15 @@ class TrajectoryStore:
             conn.execute("DELETE FROM steps WHERE task_id=?", (state.task_id,))
             conn.executemany(
                 """INSERT INTO steps (task_id, idx, goal, tool, params, why, status,
-                                      observation, success, elapsed_ms)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                                      observation, success, elapsed_ms, started_at, ended_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [
                     (
                         state.task_id, s.index, s.goal, s.tool,
                         json.dumps(s.params, ensure_ascii=False), s.why,
                         s.status.value, s.observation, int(s.success), s.elapsed_ms,
+                        s.started_at.isoformat() if s.started_at else None,
+                        s.ended_at.isoformat() if s.ended_at else None,
                     )
                     for s in state.steps
                 ],
@@ -147,27 +180,37 @@ class TrajectoryStore:
             step_rows = conn.execute(
                 "SELECT * FROM steps WHERE task_id=? ORDER BY idx", (task_id,)
             ).fetchall()
-        state = AgentState(
-            goal=row["goal"],
-            task_id=row["task_id"],
-            state=TaskState(row["state"]),
-            cursor=row["cursor"],
-            iteration=row["iteration"],
-            result=row["result"] or "",
-            error=row["error"] or "",
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-        )
-        state.steps = [
-            StepRecord(
-                index=r["idx"], goal=r["goal"] or "", tool=r["tool"] or "",
-                params=json.loads(r["params"] or "{}"), why=r["why"] or "",
-                status=StepStatus(r["status"]), observation=r["observation"] or "",
-                success=bool(r["success"]),
-            )
-            for r in step_rows
-        ]
-        return state
+
+        # 统一交给 `AgentState.from_dict`，不再手写反序列化——
+        # 原先那版手写的**丢了 started_at/ended_at 和 plan**，
+        # 导致读回来的任务耗时永远是 0。两处各写各的，迟早漂移。
+        payload = {
+            "task_id": row["task_id"],
+            "goal": row["goal"],
+            "state": row["state"],
+            "cursor": row["cursor"],
+            "iteration": row["iteration"],
+            "result": row["result"] or "",
+            "error": row["error"] or "",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "steps": [
+                {
+                    "index": r["idx"],
+                    "goal": r["goal"] or "",
+                    "tool": r["tool"] or "",
+                    "params": _safe_params(r["params"]),
+                    "why": r["why"] or "",
+                    "status": r["status"],
+                    "observation": r["observation"] or "",
+                    "success": bool(r["success"]),
+                    "started_at": _column(r, "started_at"),
+                    "ended_at": _column(r, "ended_at"),
+                }
+                for r in step_rows
+            ],
+        }
+        return AgentState.from_dict(payload)
 
     def latest_unfinished(self) -> AgentState | None:
         """最近一条没跑完的任务，供启动时提示「要不要接着做」。"""

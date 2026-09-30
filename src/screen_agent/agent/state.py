@@ -60,6 +60,31 @@ class IllegalTransition(RuntimeError):
     """非法状态跳转。"""
 
 
+def _parse_dt(value: str | None) -> datetime | None:
+    """容错解析时间戳。旧记录可能是空、也可能格式不同——**解析不了就当没有**，
+    不能因为一个时间戳让整条历史任务读不回来。"""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_task_state(value: str | None) -> TaskState:
+    try:
+        return TaskState(value)
+    except (TypeError, ValueError):
+        return TaskState.PENDING
+
+
+def _to_step_status(value: str | None) -> StepStatus:
+    try:
+        return StepStatus(value)
+    except (TypeError, ValueError):
+        return StepStatus.PENDING
+
+
 @dataclass
 class PlanStep:
     """一步要做的事；why 是给人看的理由，直接进 UI。"""
@@ -163,6 +188,12 @@ class AgentState:
             "error": self.error,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            # plan 也要序列化：以前漏了它，`from_dict(to_dict())` 就不是无损的，
+            # 续跑后拿不到原始计划（steps 虽然能反推，但那是变通不是还原）
+            "plan": [
+                {"goal": p.goal, "tool": p.tool, "params": p.params, "why": p.why}
+                for p in self.plan
+            ],
             "steps": [
                 {
                     "index": s.index, "goal": s.goal, "tool": s.tool, "params": s.params,
@@ -174,6 +205,57 @@ class AgentState:
                 for s in self.steps
             ],
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AgentState:
+        """`to_dict()` 的逆运算，用于从库里把任务读回来续跑。
+
+        所有字段都做了缺失兜底——**旧记录没有 plan、没有时间戳**，
+        读的时候不能因为缺键就炸掉，那样等于让历史任务永久不可恢复。
+        """
+        steps = [
+            StepRecord(
+                index=int(row.get("index", i)),
+                goal=row.get("goal", ""),
+                tool=row.get("tool", ""),
+                params=dict(row.get("params") or {}),
+                why=row.get("why", ""),
+                status=_to_step_status(row.get("status")),
+                observation=row.get("observation", ""),
+                success=bool(row.get("success")),
+                started_at=_parse_dt(row.get("started_at")),
+                ended_at=_parse_dt(row.get("ended_at")),
+            )
+            for i, row in enumerate(data.get("steps") or [])
+        ]
+        plan_rows = data.get("plan")
+        if plan_rows:
+            plan = [
+                PlanStep(
+                    goal=p.get("goal", ""), tool=p.get("tool", ""),
+                    params=dict(p.get("params") or {}), why=p.get("why", ""),
+                )
+                for p in plan_rows
+            ]
+        else:
+            # 旧记录没有 plan：由 steps 反推，保证续跑时 plan 不空
+            plan = [
+                PlanStep(goal=s.goal, tool=s.tool, params=dict(s.params), why=s.why)
+                for s in steps
+            ]
+        return cls(
+            goal=data.get("goal", ""),
+            task_id=data.get("task_id") or uuid.uuid4().hex[:12],
+            state=_to_task_state(data.get("state")),
+            plan=plan,
+            steps=steps,
+            cursor=int(data.get("cursor", 0)),
+            iteration=int(data.get("iteration", 0)),
+            result=data.get("result", ""),
+            error=data.get("error", ""),
+            created_at=_parse_dt(data.get("created_at")) or datetime.now(),
+            updated_at=_parse_dt(data.get("updated_at")) or datetime.now(),
+        )
 
     # ---- 汇报 ----
 
