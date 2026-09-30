@@ -164,6 +164,18 @@ class ActivityClassifier:
                 return label
         return self._classify_rules(blob)
 
+    def classify_with_rule(
+        self, text: str, window_title: str = "", app: str = ""
+    ) -> tuple[ActivityLabel, str]:
+        """同时给出「最终判定」和「纯规则判定」。
+
+        规则跑一次是纯字符串匹配，几乎不要钱，所以每条都跑得起。
+        两路打架的样本比低置信度更值得进飞轮——它说明系统的两套标准本身就不一致。
+        """
+        blob = f"{app} {window_title} {text}".strip()
+        rule_activity = self._classify_rules(blob).activity if blob else "idle"
+        return self.classify(text, window_title, app), rule_activity
+
     # ---- 规则兜底 ----
 
     @staticmethod

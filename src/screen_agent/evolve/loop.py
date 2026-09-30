@@ -155,31 +155,42 @@ class Evolver:
     # ---- 生成候选 ----
 
     def propose_from_failures(self, failures: list[tuple[str, str, str]],
-                              limit: int = 3) -> list[Variant]:
-        """从错判案例里提取关键词，生成「把 X 加进 Y 类」的候选规则。
+                              limit: int = 4) -> list[Variant]:
+        """按目标类别聚合失败案例，每类生成一个候选（可含多个关键词）。
 
-        这是**保守**的生成器：只加关键词，不改结构、不动阈值。
-        越保守的变异越容易通过验证——激进改法在 DGM 里就是奖励黑客的高发区。
+        逐个案例生成太保守——同一类往往一次错好几条，一条条修效率太低，
+        而且每条只加一个词，验证时几乎看不出提升（实测就是这样：14 个错判只采纳了 1 项）。
+        按 `expect` 分组后，一个候选就能把该类的高频关键词一起补上。
+
+        聚合还有一层好处：**一次改动解决一类问题**，语义清楚、回滚也干净。
         """
+        grouped: dict[str, list[str]] = {}
+        for case_id, expect, _got in failures:
+            grouped.setdefault(expect, []).append(case_id)
+
         proposals: list[Variant] = []
-        for index, (case_id, expect, got) in enumerate(failures[:limit]):
-            case = self.golden.by_id(case_id)
-            if case is None:
+        for index, (expect, case_ids) in enumerate(list(grouped.items())[:limit]):
+            keywords: list[str] = []
+            for case_id in case_ids:
+                case = self.golden.by_id(case_id)
+                if case is None:
+                    continue
+                keyword = _pick_keyword(case.text, case.window_title)
+                if keyword and keyword not in keywords:
+                    keywords.append(keyword)
+            current = tuple(self.rules.get(expect, ()))
+            fresh = [k for k in keywords if k not in current]
+            if not fresh:
                 continue
-            keyword = _pick_keyword(case.text, case.window_title)
-            if not keyword:
-                continue
-            new_rules = copy.deepcopy(self.rules)
-            current = new_rules.get(expect, ())
-            if keyword in current:
-                continue
-            new_rules[expect] = (keyword,) + tuple(current)
             proposals.append(Variant(
                 variant_id=self.archive.next_id(offset=index),
                 parent_id=(self.archive.best().variant_id if self.archive.best() else ""),
                 kind="rules",
-                payload={"activity": expect, "keyword": keyword},
-                rationale=f"{case_id} 期望 {expect} 却判成 {got}，试点加关键词「{keyword}」",
+                payload={"activity": expect, "keywords": fresh},
+                rationale=(
+                    f"{expect} 类错了 {len(case_ids)} 条，"
+                    f"补关键词 {'、'.join(fresh[:4])}"
+                ),
             ))
         return proposals
 
@@ -246,9 +257,11 @@ class Evolver:
         """
         candidate_rules = copy.deepcopy(self.rules)
         activity = variant.payload.get("activity")
-        keyword = variant.payload.get("keyword")
-        if activity and keyword:
-            candidate_rules[activity] = (keyword,) + tuple(candidate_rules.get(activity, ()))
+        keywords = list(variant.payload.get("keywords") or [])
+        if activity and keywords:
+            candidate_rules[activity] = tuple(keywords) + tuple(
+                candidate_rules.get(activity, ())
+            )
 
         dev_f1, _ = self.score_dev(candidate_rules)
         holdout_f1, holdout_privacy = self.score_holdout(candidate_rules)
@@ -284,8 +297,10 @@ class Evolver:
             verified = self.verify(variant, base_dev, base_holdout, base_privacy)
             if verified.accepted:
                 activity = verified.payload["activity"]
-                keyword = verified.payload["keyword"]
-                self.rules[activity] = (keyword,) + tuple(self.rules.get(activity, ()))
+                keywords = list(verified.payload.get("keywords") or [])
+                self.rules[activity] = tuple(keywords) + tuple(
+                    self.rules.get(activity, ())
+                )
             results.append(verified)
         return results
 

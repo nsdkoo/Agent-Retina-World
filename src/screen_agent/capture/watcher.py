@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -165,6 +166,8 @@ class DesktopWatcher:
         use_ocr: bool = True,
         ocr_min_texts: int = 5,
         classifier=None,  # noqa: ANN001 - ActivityClassifier，注入式；不传就只做采集
+        flywheel=None,    # noqa: ANN001 - Flywheel，不传就不攒难例
+        flywheel_interval: float = 30.0,
     ) -> None:
         self.privacy = privacy or PrivacyGate()
         self.use_uia = use_uia
@@ -175,6 +178,9 @@ class DesktopWatcher:
         self.use_ocr = use_ocr
         self.ocr_min_texts = ocr_min_texts
         self.classifier = classifier
+        self.flywheel = flywheel
+        self.flywheel_interval = flywheel_interval
+        self._last_flywheel_at = 0.0
         self._last_key: tuple[str, str] | None = None
         self._last_seen: datetime | None = None
 
@@ -236,16 +242,49 @@ class DesktopWatcher:
         # 实测 Jev/Laya 常驻内存后单次判断约 0.05 秒，比采集本身还便宜
         if self.classifier is not None:
             try:
-                label = self.classifier.classify(
+                label, rule_activity = self.classifier.classify_with_rule(
                     event.digest(), event.window_title, event.app
                 )
                 event.activity = label.activity
                 event.focus = label.focus
                 event.interruptible = label.interruptible
+                self._feed_flywheel(event, label, rule_activity)
             except Exception:  # noqa: BLE001 - 打标失败不影响采集
                 logger.debug("活动打标失败", exc_info=True)
 
         return event
+
+    def _feed_flywheel(self, event: SightEvent, label, rule_activity: str) -> None:  # noqa: ANN001
+        """自动把可疑样本喂进飞轮——观察在跑，数据集就自己在长。
+
+        只喂两类，不是全量：**规则与模型打架**的、以及**系统自己也没底**的。
+        全量灌进去只会淹没真正该看的样本。
+
+        节流是必需的：飞轮每条都写盘，全速喂会拖慢观察循环。
+        """
+        if self.flywheel is None:
+            return
+        now = time.monotonic()
+        if now - self._last_flywheel_at < self.flywheel_interval:
+            return
+        try:
+            # 两路打架比低置信度更有价值：说明系统的两套标准本身就不一致
+            if label.source == "http" and rule_activity != label.activity:
+                self.flywheel.mark_disagreement(
+                    event.digest(), rule_activity, label.activity,
+                    event.window_title, event.app,
+                )
+                self._last_flywheel_at = now
+                return
+            threshold = getattr(self.flywheel, "low_confidence", 0.55)
+            if label.confidence and label.confidence < threshold:
+                self.flywheel.observe(
+                    event.digest(), label.activity, event.window_title, event.app,
+                    confidence=label.confidence,
+                )
+                self._last_flywheel_at = now
+        except Exception:  # noqa: BLE001 - 攒难例失败不能影响采集
+            logger.debug("喂飞轮失败", exc_info=True)
 
     def _fill_ocr(self, event: SightEvent) -> None:
         from screen_agent.capture import ocr

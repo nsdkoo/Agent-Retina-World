@@ -211,6 +211,11 @@ class VoiceAssistant:
             service_port=int(clf_cfg.get("service_port", 8790)),
         )
 
+        # 数据飞轮：观察在跑着，评测集就自己在长（喂的是难例，不是全量）
+        from screen_agent.eval.flywheel import Flywheel
+
+        self.flywheel = Flywheel(root / "data" / "eval" / "flywheel.json")
+
         self.watcher = DesktopWatcher(
             privacy=PrivacyGate(
                 deny_apps=tuple(perception_cfg.get("deny_apps") or []),
@@ -219,6 +224,7 @@ class VoiceAssistant:
             use_uia=bool(perception_cfg.get("use_uia", True)),
             uia_timeout=float(perception_cfg.get("uia_timeout", 8.0)),
             classifier=self.classifier,
+            flywheel=self.flywheel,
         )
         self.perception_enabled = bool(perception_cfg.get("enabled", True))
         self._watch_stop = threading.Event()

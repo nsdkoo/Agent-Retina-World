@@ -24,6 +24,10 @@ _PREF_PATTERN = re.compile(r"我(?:喜欢|常用|一般用)([^，。,.!！?？]{
 _REMEMBER_PATTERN = re.compile(r"记住[：:]?(.{1,40})")
 _RENOUNCE_RE = re.compile(r"(?:不再|不喜欢|不用|卸载了?)([\u4e00-\u9fffA-Za-z0-9_]{1,16})")
 _SWITCH_RE = re.compile(r"把([^，。,.!！?？]{1,12})换成([^，。,.!！?？]{1,12})")
+# 口语化的主动迁移：「我改用 X 了」比「把 X 换成 Y」常见得多。
+# 这两类是画像层评测直接测出来的盲区——原先对账场景整类 0 分。
+_ADOPT_RE = re.compile(r"(?:改用|换用|用上|开始用)([^，。,.!！?？]{1,16})")
+_MOVE_RE = re.compile(r"从([\u4e00-\u9fff]{2,10})(?:搬到|移到|迁到)([\u4e00-\u9fff]{2,10})")
 _PROJECT_PATTERN = re.compile(r"我在做(?:一个)?([^，。,.!！?？]{1,24})(?:项目|系统|工具|助手)?")
 
 _MINING_MIN_MINUTES = 30.0
@@ -97,6 +101,25 @@ class Consolidator:
             self.store.add_fact(
                 "preference", f"用户改用：{new_term}", source="chat_rule",
                 confidence=0.85, evidence=evidence, supersede_keyword=old_term,
+            )
+            written += 1
+        # 口语化的主动迁移（画像层评测测出来的盲区，原先整类漏抽）
+        m = _ADOPT_RE.search(user_text)
+        if m and not is_question:
+            new_term = m.group(1).strip().rstrip("了").strip()
+            if new_term:
+                self.store.add_fact(
+                    "preference", f"用户改用：{new_term}", source="chat_rule",
+                    confidence=0.85, evidence=evidence,
+                )
+                written += 1
+        m = _MOVE_RE.search(user_text)
+        if m and not is_question:
+            self.store.add_fact(
+                # 只记**当前状态**，旧值靠 supersede_keyword 降级留痕。
+                # 写成「用户从X搬到Y」会把旧值一起塞进画像，等于没对账。
+                "profile", f"用户现在在{m.group(2)}", source="chat_rule",
+                confidence=0.85, evidence=evidence, supersede_keyword=m.group(1),
             )
             written += 1
 
