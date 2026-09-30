@@ -3,6 +3,38 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。  
 详细过程见 [development-journal.md](development-journal.md)。
 
+## [1.3.0] - 2026-09-30
+
+### 新增
+
+- **活动类型化理解**（`understand/classify.py`）：每条观察在线打三个标签——
+  活动类型（写代码 / 开会 / 看资料 / 聊天…）、专注度、**此刻能不能打扰**
+- **接入本地类 Jev 决策模型**（`jev-playground` 的 Laya 多语言权重，643 MB，CPU 可跑）：
+  抽象是 `state + questions(choice / score / noul) → 结构化答案`，
+  实测常驻后单次判断 0.05 s（直连）/ 0.38 s（HTTP）
+- **三级后端自动降级**：本地 Jev 服务 → 关键词规则兜底 → 关闭，这个功能永远有输出
+- **服务自动拉起与常驻**：助手启动时把分类服务拉起来；模型加载期间规则顶着，
+  加载完自动切到模型，那几十秒用户感知不到
+- `SightEvent` 增加 `activity` / `focus` / `interruptible` / `url` 字段
+- 日报新增按**活动类型**的统计维度——比按应用更贴近「他在忙什么」
+
+### 变更
+
+- `jev-playground` 增加通用接口 `POST /api/ask`（原本 `/api/evaluate` 的问题集写死在客服场景）
+- `jev-playground` 端口支持 `JEV_PORT` 环境变量覆盖（默认 8765 与本项目 web 面板冲突，改用 8790）
+- `config` 新增 `perception.classifier` 段
+
+### 修复
+
+- **旧库缺列会炸**：`CREATE TABLE IF NOT EXISTS` 只保证表存在、不给已有表加字段，
+  启动时补了列对齐迁移
+- **UIA 有垃圾文本时 OCR 结果被丢弃**：`digest` 原来只在 UIA 完全为空时才用 OCR，
+  但 Electron 应用常返回一条 `Chrome Legacy Window` 空壳——改为按条数判断
+
+### 测试
+
+- `scripts/live_test_perception.py` 扩到 30 项全绿；全仓 156 测试全绿
+
 ## [1.2.0] - 2026-09-30
 
 ### 新增

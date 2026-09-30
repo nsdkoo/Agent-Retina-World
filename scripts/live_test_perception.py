@@ -70,6 +70,36 @@ def main() -> int:
     if event is not None:
         print(f"     应用归类：{event.app}｜窗口：{event.window_title or '(无标题)'}")
 
+    # ---------------- A2 OCR 兜底 ----------------
+    head("A2 OCR 兜底（UIA 拿不到内容时认图）")
+    from screen_agent.capture import ocr as ocr_mod
+    from screen_agent.capture.watcher import extract_url
+
+    langs = ocr_mod.languages()
+    ok("系统装了 OCR 语言包", bool(langs), str(langs))
+    ok("中文字间空格会被收掉", ocr_mod.clean_text("淘 保 函") == "淘保函")
+    ok("英文数字不受影响",
+       ocr_mod.clean_text("localhost:5199 WorkBuddy") == "localhost:5199 WorkBuddy")
+
+    ok("能从无障碍文本揪出网址",
+       extract_url(["地址和搜索栏 https://www.zhihu.com 缩放: 90%"]) == "https://www.zhihu.com")
+    ok("能认出不带协议的本地地址",
+       extract_url([], "淘保函 localhost:5199/users/account 订单管理")
+       == "localhost:5199/users/account")
+
+    shell_event = SightEvent(
+        ts=datetime.now(), window_title="WorkBuddy", process_name="WorkBuddy.exe",
+        texts=["Chrome Legacy Window"], ocr_text="申请管理 订单管理 保函管理", source="uia+ocr",
+    )
+    ok("UIA 只剩空壳时 digest 改用 OCR 内容", "申请管理" in shell_event.digest())
+
+    rich_event = SightEvent(
+        ts=datetime.now(), window_title="知乎", process_name="msedge.exe",
+        texts=[f"正文第{i}段" for i in range(20)], ocr_text="冗余的认图结果", source="uia",
+    )
+    ok("UIA 有正文时不被 OCR 覆盖",
+       "正文第0段" in rich_event.digest() and "冗余的认图" not in rich_event.digest())
+
     # ---------------- B 记录与检索 ----------------
     head("B 行为日志 + 中文全文检索")
     tmp = Path(tempfile.mkdtemp(prefix="rita-journal-"))

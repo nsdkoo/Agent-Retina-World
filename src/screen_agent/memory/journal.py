@@ -36,8 +36,13 @@ CREATE TABLE IF NOT EXISTS sights (
     source       TEXT DEFAULT 'title',
     skip_reason  TEXT DEFAULT '',
     digest       TEXT DEFAULT '',
-    windows      TEXT DEFAULT ''
+    windows      TEXT DEFAULT '',
+    url          TEXT DEFAULT '',
+    activity     TEXT DEFAULT '',
+    focus        REAL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_sights_url ON sights(url);
+CREATE INDEX IF NOT EXISTS idx_sights_activity ON sights(activity);
 CREATE INDEX IF NOT EXISTS idx_sights_ts ON sights(ts);
 CREATE INDEX IF NOT EXISTS idx_sights_app ON sights(app);
 
@@ -81,6 +86,24 @@ class DesktopJournal:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """给老库补新列。
+
+        `CREATE TABLE IF NOT EXISTS` 只保证表存在，**不会**给已有表加字段——
+        功能迭代之后旧库直接缺列，一读写就炸。所以每次启动都把列对齐一次。
+        """
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(sights)")}
+        for column, ddl in (
+            ("windows", "TEXT DEFAULT ''"),
+            ("url", "TEXT DEFAULT ''"),
+            ("activity", "TEXT DEFAULT ''"),
+            ("focus", "REAL DEFAULT 0"),
+        ):
+            if column not in existing:
+                conn.execute(f"ALTER TABLE sights ADD COLUMN {column} {ddl}")
 
     @contextmanager
     def _connect(self):
@@ -115,11 +138,13 @@ class DesktopJournal:
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO sights (ts, app, window_title, process_name, source,"
-                " skip_reason, digest, windows) VALUES (?,?,?,?,?,?,?,?)",
+                " skip_reason, digest, windows, url, activity, focus)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     event.ts.isoformat(), event.app, event.window_title,
                     event.process_name, event.source, event.skip_reason, digest,
-                    "\t".join(event.windows),
+                    "\t".join(event.windows), event.url,
+                    event.activity, float(event.focus or 0.0),
                 ),
             )
             sight_id = int(cursor.lastrowid or 0)
@@ -191,6 +216,7 @@ class DesktopJournal:
 
         dwell: dict[str, int] = {}
         counts: dict[str, int] = {}
+        activity_dwell: dict[str, int] = {}
         for index, row in enumerate(rows):
             app = row["app"] or "未知"
             counts[app] = counts.get(app, 0) + 1
@@ -205,12 +231,16 @@ class DesktopJournal:
                 continue
             if 0 < gap < 3600:   # 超过一小时的间隔算离开，不计入停留
                 dwell[app] = dwell.get(app, 0) + int(gap)
+                activity = row["activity"] or ""
+                if activity:
+                    activity_dwell[activity] = activity_dwell.get(activity, 0) + int(gap)
 
         return {
             "date": rows[0]["ts"][:10],
             "total": len(rows),
             "apps": sorted(counts.items(), key=lambda kv: -kv[1]),
             "dwell": sorted(dwell.items(), key=lambda kv: -kv[1]),
+            "activities": sorted(activity_dwell.items(), key=lambda kv: -kv[1]),
             "first": rows[0]["ts"][11:16],
             "last": rows[-1]["ts"][11:16],
         }

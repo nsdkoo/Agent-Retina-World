@@ -198,6 +198,19 @@ class VoiceAssistant:
             root / str(perception_cfg.get("db_path", "data/memory/desktop.db"))
         )
         hours = perception_cfg.get("active_hours")
+        # 类型化理解：用小分类器判断「他在干什么」，而不是每条都上大模型
+        clf_cfg = perception_cfg.get("classifier", {})
+        clf_cfg = clf_cfg if isinstance(clf_cfg, dict) else {}
+        from screen_agent.understand.classify import ActivityClassifier
+
+        self.classifier = ActivityClassifier(
+            service_url=str(clf_cfg.get("service_url", "http://127.0.0.1:8790")),
+            enabled=bool(clf_cfg.get("enabled", True)),
+            autostart=bool(clf_cfg.get("autostart", True)),
+            project_dir=str(clf_cfg.get("project_dir", "")),
+            service_port=int(clf_cfg.get("service_port", 8790)),
+        )
+
         self.watcher = DesktopWatcher(
             privacy=PrivacyGate(
                 deny_apps=tuple(perception_cfg.get("deny_apps") or []),
@@ -205,6 +218,7 @@ class VoiceAssistant:
             ),
             use_uia=bool(perception_cfg.get("use_uia", True)),
             uia_timeout=float(perception_cfg.get("uia_timeout", 8.0)),
+            classifier=self.classifier,
         )
         self.perception_enabled = bool(perception_cfg.get("enabled", True))
         self._watch_stop = threading.Event()
@@ -535,6 +549,14 @@ class VoiceAssistant:
 
     def _watch_loop(self) -> None:
         """桌面观察循环。出错只记日志——观察挂了不该拖垮助手本体。"""
+        # 分类服务启动时拉一次让它常驻。模型加载期间观察照跑（规则兜底顶着），
+        # 加载完自动切到模型——那几十秒用户感知不到
+        if self.classifier is not None:
+            try:
+                _, note = self.classifier.ensure_service()
+                logger.info("活动分类：%s", note)
+            except Exception:  # noqa: BLE001
+                logger.debug("拉起分类服务失败", exc_info=True)
         try:
             self.watcher.run_forever(self.journal.record, self._watch_stop, interval=1.0)
         except Exception:  # noqa: BLE001

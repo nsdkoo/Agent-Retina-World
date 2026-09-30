@@ -33,6 +33,15 @@ perception:
   uia_timeout: 8
   active_hours: [9, 23]    # 只在这个时段记录；删掉这两项表示全天
   deny_apps: []            # 额外排除的应用进程名，如 ["1password.exe"]
+  # 活动类型化理解：走本地类 Jev 决策模型（jev-playground 的 Laya 权重，643MB，CPU 可跑）
+  # 加载是进程级一次性开销（冷 55s / 热 7s），常驻后每次判断 0.05s（直连）/ 0.38s（HTTP）
+  # 关掉或者服务起不来时自动退回关键词规则，不会没有输出
+  classifier:
+    enabled: true
+    service_url: http://127.0.0.1:8790
+    autostart: true        # 助手启动时自动把分类服务拉起来常驻
+    project_dir: D:/素材存储/jev-playground
+    service_port: 8790     # 别用 8765，那个被本项目 web 面板占着
 
 vlm:
   provider: heuristic              # heuristic | openai_compatible

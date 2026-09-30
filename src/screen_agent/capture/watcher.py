@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -54,6 +55,26 @@ def classify_app(process_name: str) -> str:
     return stem
 
 
+_URL_RE = re.compile(
+    r"(?:https?://|www\.)[^\s\"'<>)）】、,，]+"       # 带协议或 www 的
+    r"|localhost:\d+[^\s\"'<>)）】、,，]*",            # 本地开发地址（不带协议但信息量大）
+    re.I,
+)
+
+
+def extract_url(texts: list[str], ocr_text: str = "") -> str:
+    """从无障碍文本或认图结果里揪出当前网址。
+
+    浏览器场景下「他在看什么」最直接的证据就是 URL：实测 Edge / Chrome 的地址栏会
+    出现在无障碍树里（能拿到 https://www.zhihu.com），Electron 版浏览器就得靠 OCR。
+    """
+    blob = " ".join(texts[:60]) + " " + ocr_text[:800]
+    match = _URL_RE.search(blob)
+    if not match:
+        return ""
+    return match.group(0).rstrip(".,;:").rstrip("/")[:200]
+
+
 # 系统窗口：记了没用，还占地方
 _SYSTEM_WINDOW_HINTS = (
     "program manager", "windows 输入体验", "microsoft text input",
@@ -85,7 +106,12 @@ class SightEvent:
     process_name: str
     texts: list[str] = field(default_factory=list)
     windows: list[str] = field(default_factory=list)   # 同屏还开着哪些窗口
-    source: str = "title"       # title / uia / screenshot
+    ocr_text: str = ""          # UIA 只拿到空壳时的认图结果
+    url: str = ""               # 当前网址（浏览器场景最直接的证据）
+    activity: str = ""          # 活动类型（coding / meeting / ...），分类器打标
+    focus: float = 0.0          # 专注度 0-1
+    interruptible: bool = True  # 此刻能不能打扰
+    source: str = "title"       # title / uia / ocr / uia+ocr
     skip_reason: str = ""       # 非空表示内容被隐私闸门挡下，只留骨架
 
     @property
@@ -97,11 +123,19 @@ class SightEvent:
         return not self.skip_reason
 
     def digest(self, limit: int = 15) -> str:
-        """压成一行，给时间线与全文检索用。含同屏窗口名——
-        「他同时在忙什么」往往就写在这些标题里。"""
-        body = " ".join(t for t in self.texts[:limit] if t.strip())
+        """压成一行，给时间线与全文检索用。
+
+        正文取法：UIA 条数够多（原生应用、浏览器）就用它；条数太少说明只拿到空壳
+        （Electron 系），这时**认图结果才是真内容**。不能因为 UIA 有「Chrome Legacy
+        Window」这么一条垃圾文本就把整段 OCR 丢掉——这是实测踩出来的坑。
+        """
+        parts = [t for t in self.texts[:limit] if t.strip()]
+        if self.ocr_text and len(parts) < 10:
+            parts = [self.ocr_text]
+        body = " ".join(parts)
         context = " ".join(self.other_windows())
-        return f"{body[:400]} {context[:200]}".strip()
+        tail = f" {self.url}" if self.url else ""
+        return f"{body[:400]} {context[:200]}{tail}".strip()
 
     def other_windows(self, limit: int = 8) -> list[str]:
         """除前台之外还开着的窗口。"""
@@ -128,6 +162,9 @@ class DesktopWatcher:
         uia_max_texts: int = 200,
         min_title_length: int = 1,
         snapshot_windows: bool = True,
+        use_ocr: bool = True,
+        ocr_min_texts: int = 5,
+        classifier=None,  # noqa: ANN001 - ActivityClassifier，注入式；不传就只做采集
     ) -> None:
         self.privacy = privacy or PrivacyGate()
         self.use_uia = use_uia
@@ -135,6 +172,9 @@ class DesktopWatcher:
         self.uia_max_texts = uia_max_texts
         self.min_title_length = min_title_length
         self.snapshot_windows = snapshot_windows
+        self.use_ocr = use_ocr
+        self.ocr_min_texts = ocr_min_texts
+        self.classifier = classifier
         self._last_key: tuple[str, str] | None = None
         self._last_seen: datetime | None = None
 
@@ -180,11 +220,44 @@ class DesktopWatcher:
         if self.use_uia:
             self._fill_texts(event, hwnd)
 
-        if event.texts and self.privacy.looks_sensitive(" ".join(event.texts[:50])):
+        # UIA 只拿到一个空壳（Electron / Chromium 系）→ 认图兜底。
+        # 这条路的代价是截一张全屏图（实测约 370 ms），所以只在真正需要时才走。
+        if self.use_ocr and len(event.texts) < self.ocr_min_texts:
+            self._fill_ocr(event)
+
+        event.url = extract_url(event.texts, event.ocr_text)
+
+        if self.privacy.looks_sensitive(" ".join(event.texts[:50]) + event.ocr_text):
             event.texts = []
+            event.ocr_text = ""
             event.skip_reason = "内容疑似敏感"
 
+        # 类型化理解：判断「他在干什么」。用小分类器而不是大模型——
+        # 实测 Jev/Laya 常驻内存后单次判断约 0.05 秒，比采集本身还便宜
+        if self.classifier is not None:
+            try:
+                label = self.classifier.classify(
+                    event.digest(), event.window_title, event.app
+                )
+                event.activity = label.activity
+                event.focus = label.focus
+                event.interruptible = label.interruptible
+            except Exception:  # noqa: BLE001 - 打标失败不影响采集
+                logger.debug("活动打标失败", exc_info=True)
+
         return event
+
+    def _fill_ocr(self, event: SightEvent) -> None:
+        from screen_agent.capture import ocr
+
+        try:
+            text = ocr.capture_and_recognize()
+        except Exception:  # noqa: BLE001 - 认图失败退回只有标题
+            logger.debug("OCR 兜底失败", exc_info=True)
+            return
+        if text:
+            event.ocr_text = text[:3000]
+            event.source = "uia+ocr" if event.texts else "ocr"
 
     @staticmethod
     def _snapshot_windows() -> list[str]:
