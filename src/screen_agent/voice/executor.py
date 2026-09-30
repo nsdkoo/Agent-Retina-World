@@ -122,9 +122,12 @@ class CommandExecutor:
         messages.append({"role": "user", "content": user_text})
 
         # 工具轮：LLM 自主选工具（仅暴露 SAFE/LOW 级，HIGH 不自动暴露），≤3 轮
+        # registry 是惰性初始化的，必须先实例化再判空——用 self._registry is not None
+        # 会让首次对话永远拿不到工具列表，模型只能说空话（"正在为您整理"的根因之一）
         tools_used = 0
-        if hasattr(self.chat_client, "complete_with_tools") and self._registry is not None:
-            openai_tools = self._registry.list_openai_tools(max_risk=RiskLevel.LOW)
+        registry = self._registry_with_confirm()
+        if hasattr(self.chat_client, "complete_with_tools"):
+            openai_tools = registry.list_openai_tools(max_risk=RiskLevel.LOW)
             for _ in range(3):
                 if not openai_tools:
                     break
@@ -157,8 +160,17 @@ class CommandExecutor:
                         args = json.loads(call.get("arguments") or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    result = self._registry.run(name, **args)
+                    result = registry.run(name, **args)
                     tools_used += 1
+                    if result.options:
+                        # 需要用户拍板：选项直接交给 UI 渲染成按钮，
+                        # 不让模型继续往下编（这是"说空话"的堵法）
+                        return ActionResult(
+                            success=True,
+                            message=result.message,
+                            detail={"chat": True, "tools_used": tools_used, "ask": True},
+                            options=result.options,
+                        )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call.get("id") or f"call_{tools_used}",

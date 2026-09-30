@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from screen_agent.tools import clipboard, files, input, system, volume, windows
+from screen_agent.tools import clipboard, dialog, files, input, system, volume, windows
 from screen_agent.tools.apps import AppResolver
 from screen_agent.tools.registry import RiskLevel, ToolRegistry, ToolSpec
 from screen_agent.voice.executor import ActionResult
@@ -41,10 +41,30 @@ def build_default_registry(
     register(ToolSpec("app.close", "关闭应用", _app_close, RiskLevel.HIGH, {"target": "进程名"}))
     register(ToolSpec("app.list", "列出已装应用", _app_list, RiskLevel.SAFE))
 
-    # ---- 文件 ----
+    # ---- 文件（读）----
     register(ToolSpec("files.open", "打开文件或文件夹", files.open_path, RiskLevel.LOW, {"path": "路径"}))
     register(ToolSpec("files.list", "列出目录内容", files.list_dir, RiskLevel.SAFE, {"path": "目录"}))
     register(ToolSpec("files.find", "模糊找文件", files.find_files, RiskLevel.SAFE, {"pattern": "文件名关键词"}))
+
+    # ---- 文件（写）——白名单 + 重名不覆盖 + 操作日志，delete 走回收站且需确认 ----
+    register(ToolSpec("files.mkdir", "新建文件夹", files.make_dir, RiskLevel.LOW, {"path": "文件夹名或路径"}))
+    register(ToolSpec("files.move", "移动文件到目标目录", files.move_path, RiskLevel.LOW,
+                      {"src": "源路径", "dst": "目标目录或完整路径"}))
+    register(ToolSpec("files.copy", "复制文件到目标目录", files.copy_path, RiskLevel.LOW,
+                      {"src": "源路径", "dst": "目标目录或完整路径"}))
+    register(ToolSpec("files.rename", "重命名文件", files.rename_path, RiskLevel.LOW,
+                      {"src": "源路径", "new_name": "新名字"}))
+    register(ToolSpec("files.organize", "把目录里的文件按类型或修改时间归档进子文件夹（先出清单再动手）",
+                      files.organize_dir, RiskLevel.LOW,
+                      {"path": "目录，默认桌面", "mode": "type 按类型 / date 按时间 / 留空则先问用户"}))
+    register(ToolSpec("files.delete", "删除文件（放进回收站，可还原）", files.delete_path,
+                      RiskLevel.HIGH, {"path": "路径"}))
+    register(ToolSpec("files.undo", "撤销上一次文件操作", files.undo_last, RiskLevel.LOW))
+
+    # ---- 交互：把需要用户拍板的事变成可点选项 ----
+    register(ToolSpec("ask.options", "需要用户拍板时提问并给出候选，别自己替用户猜",
+                      dialog.ask_options, RiskLevel.SAFE,
+                      {"question": "要问用户的问题", "options": "候选，用 | 分隔，最多 4 个"}))
 
     # ---- 剪贴板 ----
     register(ToolSpec("clip.get", "读剪贴板", lambda: clipboard.clip_get_text(), RiskLevel.SAFE))

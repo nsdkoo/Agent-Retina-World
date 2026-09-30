@@ -11,3 +11,4 @@ class AssistantSignals(QObject):
     partial = pyqtSignal(str)       # 流式回话增量（累计全文）
     result = pyqtSignal(str)        # 执行结果 / 助手回复
     session = pyqtSignal(bool)      # 连续对话开/关
+    prompt = pyqtSignal(str, list)  # 需要用户拍板：问题 + 候选按钮（点选后回传指令）

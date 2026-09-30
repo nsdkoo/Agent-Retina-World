@@ -136,6 +136,12 @@ def build_style(theme: str) -> str:
 #ReplyCard QScrollBar::handle:vertical {{ background: {t['muted']}; border-radius: 3px; min-height: 24px; }}
 #ReplyCard QScrollBar::add-line, #ReplyCard QScrollBar::sub-line {{ height: 0; }}
 #ReplyCard QScrollBar::add-page, #ReplyCard QScrollBar::sub-page {{ background: transparent; }}
+#OptionBtn {{
+    color: {t['text']}; background: {t['panel_top']};
+    border: 1px solid {t['panel_border']}; border-radius: 9px;
+    font-size: 12px; padding: 7px 10px; text-align: left;
+}}
+#OptionBtn:hover {{ background: {t['btn_hover_bg']}; border-color: {t['panel_border_focus']}; }}
 #Status {{ color: {t['sub']}; font-size: 11px; }}
 """
 
@@ -385,6 +391,15 @@ class ChatPanel(QWidget):
         self._meta_container.hide()
         root.addWidget(self._meta_container)
 
+        # 需要用户拍板时的候选按钮（点选即作为下一条指令提交，Agent 不必替用户猜）
+        self._options_box = QWidget()
+        self._options_box.setStyleSheet("background: transparent;")
+        self._options_layout = QVBoxLayout(self._options_box)
+        self._options_layout.setContentsMargins(0, 2, 0, 2)
+        self._options_layout.setSpacing(4)
+        self._options_box.hide()
+        root.addWidget(self._options_box)
+
         # 输入区上方极细分隔线（对话区与输入区分界）
         self._input_divider = QLabel()
         self._input_divider.setObjectName("ReplyDivider")
@@ -434,6 +449,7 @@ class ChatPanel(QWidget):
         signals.transcript.connect(lambda t: self.add_bubble(t, "User"))
         signals.partial.connect(self._on_partial)
         signals.result.connect(self._on_result_text)
+        signals.prompt.connect(self._on_prompt)
 
         self._reply_visible = False
         self._activity_visible = False
@@ -592,6 +608,41 @@ class ChatPanel(QWidget):
     def add_info(self, text: str) -> None:
         self.add_bubble(text, "Info")
 
+    # ---- 需要用户拍板：候选按钮 ----
+
+    def _on_prompt(self, question: str, options: list) -> None:
+        """正文已经由 result 渲染过了，这里只负责把候选按钮摆出来。"""
+        self.show_options(list(options or []))
+
+    def show_options(self, options: list[str]) -> None:
+        self.clear_options()
+        labels = [str(item).strip() for item in options if str(item).strip()][:4]
+        if not labels:
+            return
+        for label in labels:
+            btn = QPushButton(label)
+            btn.setObjectName("OptionBtn")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _checked=False, text=label: self._pick_option(text))
+            self._options_layout.addWidget(btn)
+        self._greeting.hide()
+        self._options_box.show()
+        self._relayout()
+
+    def clear_options(self) -> None:
+        while self._options_layout.count():
+            item = self._options_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._options_box.hide()
+
+    def _pick_option(self, text: str) -> None:
+        """点选＝用户把这句话说了一遍：回显后走同一条指令通道。"""
+        self.clear_options()
+        self.add_bubble(text, "User")
+        self._on_submit_text(text)
+
     def set_model_label(self, name: str) -> None:
         self._current_model = name
         if not self._model_options:
@@ -633,6 +684,7 @@ class ChatPanel(QWidget):
         self._reveal_buffer = ""
         self._reveal_shown = 0.0
         self._reveal_timer.stop()
+        self.clear_options()
         self._scroll.clear_messages()
         self._scroll.hide()
         self._scroll.setFixedHeight(0)

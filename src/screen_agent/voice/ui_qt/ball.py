@@ -402,9 +402,16 @@ class QtFloatingBall:
             if accumulated:
                 toast.show_message(accumulated, "Bot", timeout_ms=None, anchor=ball_anchor())
 
+        def on_options(question: str, options: list) -> None:
+            signals.prompt.emit(question, list(options))
+            # 需要用户拍板时把面板拉出来，否则按钮摆在那儿没人点得到
+            if self._panel is not None and not self._panel.isVisible():
+                self._toggle_panel(self._panel, self._ball)
+
         self.assistant.on_transcript(on_transcript)
         self.assistant.on_result(on_result)
         self.assistant.on_result_delta(on_delta)
+        self.assistant.on_options(on_options)
 
         def play_start_chain() -> None:
             self.assistant.audio_loop.set_muted_mic()

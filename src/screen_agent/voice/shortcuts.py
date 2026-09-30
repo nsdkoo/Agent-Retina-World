@@ -63,10 +63,10 @@ def create_shortcuts(project_root: Path) -> list[str]:
 
     created: list[str] = []
     targets = [
-        (_shell_folder("Desktop") / "瑞塔语音助手.lnk", "桌面"),
+        (_shell_folder("Desktop") / "瑞塔桌面助手.lnk", "桌面"),
         (
             _shell_folder("ApplicationData") / "Microsoft" / "Windows"
-            / "Start Menu" / "Programs" / "瑞塔语音助手.lnk",
+            / "Start Menu" / "Programs" / "瑞塔桌面助手.lnk",
             "开始菜单",
         ),
     ]

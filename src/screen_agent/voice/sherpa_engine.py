@@ -44,9 +44,29 @@ class SherpaAsr:
             model_dir, ["*encoder*.int8.onnx", "*encoder*.onnx"]
         )
         decoder = _find_one(model_dir, ["*decoder*.onnx"])
-        joiner = _find_one(model_dir, ["*joiner*.int8.onnx", "*joiner*.onnx"])
         tokens = model_dir / "tokens.txt"
+        joiner = next(iter(model_dir.glob("*joiner*.onnx")), None)
         logger.info("加载 ASR 模型: %s", model_dir.name)
+        endpoint_kwargs = dict(
+            enable_endpoint_detection=True,
+            rule1_min_trailing_silence=1.2,
+            rule2_min_trailing_silence=0.8,
+            rule3_min_utterance_length=20,
+        )
+        if joiner is None:
+            # 流式 Paraformer（CTC 类，无 joiner）：不支持热词
+            self.recognizer = sherpa_onnx.OnlineRecognizer.from_paraformer(
+                encoder=str(encoder),
+                decoder=str(decoder),
+                tokens=str(tokens),
+                num_threads=num_threads,
+                sample_rate=SAMPLE_RATE,
+                feature_dim=80,
+                **endpoint_kwargs,
+            )
+            if hotwords_file and hotwords_file.exists():
+                logger.info("Paraformer 不支持热词注入，已忽略 %s", hotwords_file.name)
+            return
         self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=str(tokens),
             encoder=str(encoder),
@@ -55,10 +75,7 @@ class SherpaAsr:
             num_threads=num_threads,
             sample_rate=SAMPLE_RATE,
             feature_dim=80,
-            enable_endpoint_detection=True,
-            rule1_min_trailing_silence=1.2,
-            rule2_min_trailing_silence=0.8,
-            rule3_min_utterance_length=20,
+            **endpoint_kwargs,
         )
         # 热词需 modified_beam_search 解码（greedy 不支持）；构造失败自动去热词重试
         if hotwords_file and hotwords_file.exists():

@@ -13,6 +13,8 @@ class ActionResult:
     success: bool
     message: str
     detail: dict | None = field(default_factory=dict)
+    # 需要用户拍板时给出的候选（UI 渲染成可点按钮，点选后原样作为下一条指令提交）
+    options: list[str] | None = None
 
 
 class ConfirmationNeeded(RuntimeError):

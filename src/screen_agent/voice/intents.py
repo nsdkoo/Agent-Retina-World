@@ -19,6 +19,7 @@ class IntentType(str, Enum):
     VOLUME = "volume"
     CLIPBOARD = "clipboard"
     FIND_FILES = "find_files"
+    FILE_OP = "file_op"          # 文件写操作（新建/移动/复制/重命名/删除/归档/撤销）
     LIST_WINDOWS = "list_windows"
     FOCUS_WINDOW = "focus_window"
     LOCK_SCREEN = "lock_screen"
@@ -96,6 +97,90 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
             tool="files.find", params={"pattern": find_m.group(1).strip()},
         )
 
+    # ---- 文件写操作（必须排在 open / chat 之前，否则「整理桌面文件」会掉进闲聊）----
+    if re.search(r"^(?:撤销|撤回|撤销上一步|撤销刚才|回退|undo)$", text, re.I):
+        return Intent(IntentType.FILE_OP, raw_command=text, tool="files.undo")
+
+    if re.search(r"^(?:确认|确定|动手)(?:归档|整理)?$|^(?:执行归档|开始整理|确认归档|执行整理)$", text):
+        return Intent(
+            IntentType.FILE_OP, raw_command=text,
+            tool="files.organize", params={"apply": True},
+        )
+
+    if re.search(r"算了|先不动|不用了|不整理了|别整理|取消(?:整理|归档)?", text):
+        return Intent(
+            IntentType.FILE_OP, raw_command=text,
+            tool="files.organize", params={"mode": "cancel"},
+        )
+
+    if re.search(r"按(?:修改)?(?:时间|日期|月份)归档|按日期归档", text):
+        return Intent(
+            IntentType.FILE_OP, raw_command=text,
+            tool="files.organize", params={"mode": "date"},
+        )
+
+    if re.search(r"按(?:文件)?(?:类型|格式)归档", text):
+        return Intent(
+            IntentType.FILE_OP, raw_command=text,
+            tool="files.organize", params={"mode": "type"},
+        )
+
+    organize_m = re.search(
+        r"(?:整理|归类|归置|收拾)(?:一下|下)?"
+        r"(?:(桌面|下载|文档|图片|视频|音乐)(?:上|里|里面)?|(?:这些)?文件)",
+        text,
+    )
+    if organize_m:
+        folder = organize_m.group(1) or ""
+        return Intent(
+            IntentType.FILE_OP, target=folder, raw_command=text,
+            tool="files.organize", params={"path": folder},
+        )
+
+    mkdir_m = re.search(
+        r"(?:新建|创建|建一个|建个|加个)(?:一个)?(?:文件夹|目录)\s*(?:叫|名字叫|名为|：|:)?\s*(.*)$",
+        text,
+    )
+    if mkdir_m:
+        name = mkdir_m.group(1).strip()
+        return Intent(
+            IntentType.FILE_OP, target=name, raw_command=text,
+            tool="files.mkdir", params={"path": name},
+        )
+
+    mv_m = re.search(r"把\s*(.+?)\s*(?:移动到|移到|挪到|搬到|移至)\s*(.+)", text)
+    if mv_m:
+        return Intent(
+            IntentType.FILE_OP, target=mv_m.group(1).strip(), raw_command=text,
+            tool="files.move",
+            params={"src": mv_m.group(1).strip(), "dst": mv_m.group(2).strip()},
+        )
+
+    cp_m = re.search(r"把\s*(.+?)\s*(?:复制到|拷贝到|复制至|复制一份到)\s*(.+)", text)
+    if cp_m:
+        return Intent(
+            IntentType.FILE_OP, target=cp_m.group(1).strip(), raw_command=text,
+            tool="files.copy",
+            params={"src": cp_m.group(1).strip(), "dst": cp_m.group(2).strip()},
+        )
+
+    rn_m = re.search(
+        r"把\s*(.+?)\s*(?:重命名为|改名为|更名为|重命名|改名)\s*(?:为|成|叫)?\s*(.+)", text
+    )
+    if rn_m:
+        return Intent(
+            IntentType.FILE_OP, target=rn_m.group(1).strip(), raw_command=text,
+            tool="files.rename",
+            params={"src": rn_m.group(1).strip(), "new_name": rn_m.group(2).strip()},
+        )
+
+    rm_m = re.search(r"(?:删除|删掉|删了|清掉|丢掉)\s*(.+)", text)
+    if rm_m:
+        return Intent(
+            IntentType.FILE_OP, target=rm_m.group(1).strip(), raw_command=text,
+            tool="files.delete", params={"path": rm_m.group(1).strip()},
+        )
+
     if re.search(r"(?:列出|看看|有哪些)(?:打开的)?窗口", text):
         return Intent(IntentType.LIST_WINDOWS, raw_command=text, tool="win.list")
     focus_m = re.search(r"(?:切换|切)(?:到|至)\s*(.+?)(?:的)?(?:窗口|界面)?$", text)
@@ -121,6 +206,11 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
     open_m = re.search(r"打开\s*(.+)", text)
     if open_m:
         target = open_m.group(1).strip()
+        # 复合指令：「打开 X 然后/给我/顺便 Y」—— 只取前半段的应用名。
+        # 不截断的话整句会被当成应用名去解析（"打开qq给我的小号 发个消息"报错的根因）
+        head = re.split(r"然后|接着|并且|顺便|再帮|再给|给我|帮我|，|,", target)[0].strip()
+        if head:
+            target = head
         for alias, url in url_aliases.items():
             if alias in target:
                 return Intent(IntentType.OPEN_URL, target=url, raw_command=text)

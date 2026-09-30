@@ -184,6 +184,8 @@ class VoiceAssistant:
         self._on_result: Callable[[str], None] | None = None
         self._on_result_delta: Callable[[str], None] | None = None
         self._on_session: Callable[[bool], None] | None = None
+        self._on_options: Callable[[str, list[str]], None] | None = None
+        self._pending_options: tuple[str, list[str]] | None = None
 
     @staticmethod
     def _chat_model_hint(chat_cfg: dict) -> str:
@@ -236,6 +238,21 @@ class VoiceAssistant:
         except Exception:
             logger.debug("delta 回调异常", exc_info=True)
 
+    def on_options(self, cb: Callable[[str, list[str]], None]) -> None:
+        """注册「需要用户拍板」回调：问题 + 候选选项，UI 渲染成可点按钮。"""
+        self._on_options = cb
+
+    def emit_options(self, text: str, options: list[str]) -> None:
+        if self._on_options:
+            self._on_options(text, options)
+
+    def _flush_options(self, result: ActionResult | None) -> ActionResult | None:
+        """暂存候选，等 emit_result 播完正文再交给 UI——顺序反了按钮会先于文字冒出来。"""
+        self._pending_options = None
+        if result is not None and result.options:
+            self._pending_options = (result.message, list(result.options))
+        return result
+
     def on_session(self, cb: Callable[[bool], None]) -> None:
         self._on_session = cb
 
@@ -264,6 +281,11 @@ class VoiceAssistant:
     def emit_result(self, text: str) -> None:
         if self._on_result:
             self._on_result(text)
+        # 正文播完再弹候选按钮：让用户先看到问题，再看到选择
+        pending = self._pending_options
+        if pending is not None:
+            self._pending_options = None
+            self.emit_options(pending[0], pending[1])
 
     def speak(self, text: str) -> None:
         self.speaker.say(text)
@@ -338,7 +360,7 @@ class VoiceAssistant:
             self._set_session(True)
         else:
             self._extend_session()
-        return result
+        return self._flush_options(result)
 
     def end_session(self) -> None:
         self._set_session(False)
@@ -372,7 +394,7 @@ class VoiceAssistant:
                 self._set_session(False)
             else:
                 self._extend_session()
-            return result
+            return self._flush_options(result)
 
         if not self.contains_wake_word(text):
             return None
@@ -387,7 +409,7 @@ class VoiceAssistant:
         result = self.executor.run(intent)
         if self.session_enabled and intent.type != IntentType.END_SESSION:
             self._set_session(True)
-        return result
+        return self._flush_options(result)
 
     def _set_session(self, active: bool) -> None:
         self._in_session = active
