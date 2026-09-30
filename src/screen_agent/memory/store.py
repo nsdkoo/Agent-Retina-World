@@ -189,7 +189,8 @@ class MemoryStoreV2:
 
     def save_agent_episode(self, goal: str, summary: str, task_id: str,
                            started_at: datetime | None = None,
-                           ended_at: datetime | None = None) -> None:
+                           ended_at: datetime | None = None,
+                           resources: list[str] | None = None) -> None:
         """把一次 agent 任务的收尾写成一条 episode（情节记忆）。
 
         **为什么是 episode 而不是 fact**：任务日志写进语义层会污染检索——
@@ -199,6 +200,9 @@ class MemoryStoreV2:
 
         复用 `events` 表的好处很实在：现成的 HybridRetriever / format_for_prompt
         直接就能检索到，**不需要为「任务记忆」另写一套检索**。
+
+        `resources` 是这次动到的路径/文件/应用。它跟 task_id 一起进
+        `evidence_paths`——将来要提炼「用户常在哪干活」时，这是唯一的原材料。
         """
         now = datetime.now()
         text = (summary or goal or "").strip().replace("\n", " ")
@@ -209,7 +213,7 @@ class MemoryStoreV2:
             page_category="桌面任务",
             user_action="task_runner",
             summary=text[:120],
-            evidence_paths=[task_id],
+            evidence_paths=[task_id, *(resources or [])],
             task_tag="agent-task",
             frame_count=1,
         )

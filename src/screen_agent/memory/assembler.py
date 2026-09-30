@@ -32,6 +32,58 @@ class ContextAssembler:
         self.max_episodes = max_episodes
         self.last_used_event_ids: list[str] = []
 
+    def build_agent_context(self, goal: str, budget_tokens: int = 350) -> str:
+        """给**任务规划**用的记忆片段（区别于给闲聊的 system prompt）。
+
+        侧重完全不同：planner 要的是「**这件事你平时怎么干的**」——
+        先例（episodes）比用户画像（facts）有用得多。
+        「用户喜欢深色主题」对拆解「整理下载目录」毫无帮助，
+        但「上次整理是按文件类型分的」直接决定这一步该怎么写。
+
+        预算也刻意压得小（默认 350 token）：planner 的 prompt 里已经有一长串工具清单，
+        记忆塞多了会把工具挤掉，那是本末倒置。
+
+        取不到东西时返回空串，调用方据此跳过——**别让一个空标题占着 prompt**。
+        """
+        from datetime import datetime
+
+        lines: list[str] = []
+        used = 0
+
+        # 先例优先：做过什么类似的事
+        try:
+            episodes = self.retriever.retrieve(query=goal, top_k=3)
+        except Exception:  # noqa: BLE001 - 记忆取不到不该影响规划
+            episodes = []
+        for scored in episodes:
+            summary = (scored.event.summary or "").strip().replace("\n", " ")
+            if not summary:
+                continue
+            line = f"- 之前做过：{summary[:60]}"
+            cost = _estimate_tokens(line)
+            if used + cost > budget_tokens:
+                break
+            lines.append(line)
+            used += cost
+
+        # 还有预算才补用户偏好——它的作用是润色参数，不是决定拆解方式
+        if used < budget_tokens:
+            facts = self.store.list_facts(limit=self.max_facts * 2)
+            facts.sort(key=lambda f: -fact_score(f, datetime.now()))
+            for fact in facts:
+                if used >= budget_tokens:
+                    break
+                if fact.confidence < 0.3:      # 与检索判分口径保持一致，别把噪声喂进去
+                    continue
+                line = f"- [{fact.category}] {fact.content}"
+                cost = _estimate_tokens(line)
+                if used + cost > budget_tokens:
+                    continue
+                lines.append(line)
+                used += cost
+
+        return "\n".join(lines)
+
     def build_system_prompt(self, base_prompt: str, user_text: str | None = None) -> str:
         sections: list[tuple[str, str]] = []
 

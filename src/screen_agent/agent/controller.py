@@ -741,13 +741,45 @@ class AgentController:
         try:
             self.episode_sink(
                 goal=state.goal,
-                summary=state.summary(),
+                summary=self._episode_summary(state),
                 task_id=state.task_id,
                 started_at=state.created_at,
                 ended_at=datetime.now(),
+                resources=self._episode_resources(state),
             )
         except Exception:  # noqa: BLE001
             logger.debug("任务收尾写入记忆失败", exc_info=True)
+
+    @staticmethod
+    def _episode_summary(state: AgentState) -> str:
+        """摘要里带上「用了哪些手法」。
+
+        只说「做了什么」的话，下次遇到类似目标时帮不上忙——
+        规划器需要的是**先例的手法**，所以把工具名一并记下来。
+        """
+        tools: list[str] = []
+        for step in state.steps:
+            if step.status is StepStatus.DONE and step.tool not in tools:
+                tools.append(step.tool)
+        head = state.summary()
+        if tools:
+            head += f"（用了 {'、'.join(tools[:5])}）"
+        return head
+
+    @staticmethod
+    def _episode_resources(state: AgentState) -> list[str]:
+        """从工具参数里提取「这次动到了什么」——目录、文件、应用。
+
+        这些是**「习惯」的原材料**：常用哪个目录、常开哪个应用，
+        只能从实际动手的记录里看出来，问是问不出来的。
+        """
+        resources: list[str] = []
+        for step in state.steps:
+            for key in ("path", "src", "dst", "target", "workdir", "query"):
+                value = step.params.get(key)
+                if isinstance(value, str) and value.strip() and value not in resources:
+                    resources.append(value.strip())
+        return resources[:10]
 
     def _close_trace(self, status: str = "ok") -> None:
         """给任务级 span 收尾。没收尾的 span 在回放里看不出这任务到底成没成。"""

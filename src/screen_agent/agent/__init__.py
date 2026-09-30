@@ -62,12 +62,24 @@ def build_agent(
         mode=mode,
         store_path=root / "data" / "agent" / "policy.json",
     )
+    # 规划用的记忆片段：让 planner 知道「这件事用户平时是怎么干的」。
+    # 取不到就返回空串，planner 那边会整段跳过——**不能因为记忆没接上就把规划也停了**
+    context_fn = None
+    if memory_store is not None:
+        try:
+            from screen_agent.memory.assembler import ContextAssembler
+
+            context_fn = ContextAssembler(memory_store).build_agent_context
+        except Exception:  # noqa: BLE001
+            context_fn = None
+
     planner = Planner(
         registry,
         chat_client=chat_client,
         app_aliases=app_aliases or {},
         url_aliases=url_aliases or {},
         max_steps=max_steps,
+        context_fn=context_fn,
     )
     # 收尾回流记忆的出口。用鸭子类型而不是直接依赖 memory 模块——
     # 没接记忆库时（比如测试）整条链路照常工作，只是不写 episode

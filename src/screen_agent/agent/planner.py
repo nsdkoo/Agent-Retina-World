@@ -47,6 +47,7 @@ class Planner:
         url_aliases: dict[str, str] | None = None,
         max_steps: int = 5,
         max_risk: RiskLevel = RiskLevel.LOW,
+        context_fn=None,  # noqa: ANN001 - Callable[[str], str]，取规划用的记忆片段
     ) -> None:
         self.registry = registry
         self.chat_client = chat_client
@@ -54,6 +55,9 @@ class Planner:
         self.url_aliases = url_aliases or {}
         self.max_steps = max_steps
         self.max_risk = max_risk
+        # 让规划器知道「这件事用户平时是怎么干的」。只有 LLM 路径会用——
+        # 规则路径是纯字符串匹配，给它上下文也没处使
+        self.context_fn = context_fn
 
     # ---- 要不要走规划 ----
 
@@ -124,9 +128,23 @@ class Planner:
             params = "、".join(spec.params_doc.keys()) or "无参数"
             lines.append(f"- {spec.name}（{spec.description}；参数：{params}）")
         catalogue = "\n".join(lines)
+
+        # 记忆片段：让规划器知道「这件事你平时是怎么干的」。
+        # 取不到就整段不加——别丢一个空标题占着 prompt 位置
+        memory_block = ""
+        if self.context_fn is not None:
+            try:
+                snippet = (self.context_fn(goal) or "").strip()
+            except Exception:  # noqa: BLE001 - 记忆出错不该拖垮规划
+                logger.debug("取规划上下文失败", exc_info=True)
+                snippet = ""
+            if snippet:
+                memory_block = f"关于这位用户和你之前的做法：\n{snippet}\n\n"
+
         return (
             f"把用户目标拆成不超过 {self.max_steps} 个可执行步骤。\n"
             f"可用工具：\n{catalogue}\n\n"
+            f"{memory_block}"
             f"只输出 JSON 数组，每项形如 "
             f'{{"goal": "这一步在做什么（人话）", "tool": "工具名", '
             f'"params": {{"参数名": "值"}}, "why": "为什么要这步"}}。\n'
