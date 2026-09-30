@@ -85,6 +85,31 @@ SEED_MEMORY: tuple[MemoryCase, ...] = (
         {"category": "preference", "content": "用户喜欢用 Cursor 写代码"},
         {"category": "preference", "content": "用户偏好浅色主题"},
     ], query="我喜欢用什么工具写代码", expect_recall=["Cursor"], note="偏好检索"),
+    MemoryCase("m12", "retrieve", seed_facts=[
+        {"category": "profile", "content": "用户名字是小林"},
+        {"category": "preference", "content": "用户喜欢用深色主题"},
+        {"category": "project", "content": "用户在做一个 Agent 记忆系统"},
+    ], query="我那个记忆相关的项目", expect_recall=["Agent 记忆系统"],
+        note="跨类别查询：三条事实里挑对的那条"),
+    MemoryCase("m13", "retrieve", seed_facts=[
+        {"category": "entity", "content": "用户常用的模型是 Qwen3"},
+        {"category": "preference", "content": "用户偏好本地部署"},
+    ], query="我常用什么模型", expect_recall=["Qwen3"], note="实体检索"),
+    MemoryCase("m14", "retrieve", seed_facts=[
+        {"category": "project", "content": "用户在做一个客服 Agent"},
+        {"category": "preference", "content": "用户偏好深色主题"},
+    ], query="今天中午吃什么", forbid=["客服 Agent", "深色主题"],
+        note="无关查询不该把不相关的都倒出来（用 forbid 表达不该召回）"),
+    MemoryCase("m15", "retrieve", seed_facts=[
+        {"category": "project", "content": "用户在做一个 Agent 记忆系统"},
+        {"category": "project", "content": "用户在做一个客服 Agent"},
+        {"category": "profile", "content": "用户在深圳"},
+    ], query="我手上有几个项目", expect_recall=["Agent"], note="多事实命中：任一条相关即算找回"),
+    MemoryCase("m16", "retrieve", seed_facts=[
+        {"category": "profile", "content": "用户名字是小林"},
+        {"category": "preference", "content": "用户喜欢猫"},
+        {"category": "project", "content": "用户在写一个 RAG 评测工具"},
+    ], query="我那个 RAG 的东西", expect_recall=["RAG"], note="缩写也能对上"),
     MemoryCase("m09", "forbid",
                [("我猜他可能是做算法的", "嗯")],
                [], ["算法"], "猜测不能当事实记"),
@@ -97,6 +122,7 @@ class MemoryReport:
     reconcile: ClassificationReport = field(default_factory=ClassificationReport)
     recall_hits: int = 0
     recall_total: int = 0
+    recall_at_k: float = 0.0        # 平均覆盖率：期望命中的词里实际命中多少
     hallucination: int = 0
     hallucination_total: int = 0
 
@@ -113,7 +139,8 @@ class MemoryReport:
         return "\n".join([
             f"画像层：抽取 F1 {self.extract.macro_f1:.3f}（{self.extract.total} 例）"
             f"｜对账 F1 {self.reconcile.macro_f1:.3f}（{self.reconcile.total} 例）",
-            f"  检索召回 {self.recall:.1%}（{self.recall_hits}/{self.recall_total}）",
+            f"  检索召回 {self.recall:.1%}（{self.recall_hits}/{self.recall_total}）"
+            f"　覆盖率 {self.recall_at_k:.1%}",
             f"  幻觉率 {self.hallucination_rate:.1%}"
             f"（{self.hallucination}/{self.hallucination_total}）← 理想是 0",
         ])
@@ -160,10 +187,13 @@ class MemoryEvaluator:
                 # 改调 _trial_retrieve（真检索）——原先这里调的是 _trial_extract
                 if self._trial_retrieve(case):
                     report.recall_hits += 1
+                report.recall_at_k += self._retrieve_coverage(case)
             if case.forbid:
                 report.hallucination_total += 1
                 if self._trial_hallucination(case):
                     report.hallucination += 1
+        if report.recall_total:
+            report.recall_at_k /= report.recall_total
         return report
 
     # ---- 单项试跑：都走真实抽取链路（临时库），不另写一套逻辑 ----
@@ -194,14 +224,10 @@ class MemoryEvaluator:
             return bool(joined.strip()) is False or True
         return any(word in joined for word in case.expect)
 
-    def _trial_retrieve(self, case: MemoryCase) -> bool:
-        """真检索：先灌 `seed_facts`，再拿 `query` 去查，看期望内容有没有被召回。
-
-        老实现是 `return self._trial_extract(case)`，而 `run()` 调的又是 `_trial_extract`
-        —— 于是所谓「检索召回」测的其实是抽取，检索能力一天都没被真正测过。
-        """
+    def _retrieve_contents(self, case: MemoryCase) -> list[str] | None:
+        """灌种子 → 真检索 → 返回召回内容。失败返回 None（和"召回为空"区分开）。"""
         if not case.query:
-            return False
+            return None
         store = self._fresh_store()
         try:
             for spec in case.seed_facts:
@@ -215,11 +241,38 @@ class MemoryEvaluator:
 
             hits = FactRetriever(store).retrieve(case.query, top_k=5)
         except Exception:  # noqa: BLE001 - 单条样本失败不该炸掉整轮
+            return None
+        return [item.fact.content for item in hits]
+
+    def _trial_retrieve(self, case: MemoryCase) -> bool:
+        """真检索：先灌 `seed_facts`，再拿 `query` 去查，看期望内容有没有被召回。
+
+        老实现是 `return self._trial_extract(case)`，而 `run()` 调的又是 `_trial_extract`
+        —— 于是所谓「检索召回」测的其实是抽取，检索能力一天都没被真正测过。
+        """
+        contents = self._retrieve_contents(case)
+        if contents is None:
             return False
-        if not case.expect_recall:
+        if not case.expect_recall and not case.forbid:
             return False
-        joined = " ".join(item.fact.content for item in hits)
-        return any(word in joined for word in case.expect_recall)
+        joined = " ".join(contents)
+        if case.expect_recall:
+            return any(word in joined for word in case.expect_recall)
+        # 用 forbid 表达「这次查询不该把不相关的东西倒出来」——
+        # 无关查询下检索器照样会返回 top-k，问题在于返回的是不是噪音
+        return not any(word in joined for word in case.forbid)
+
+    def _retrieve_coverage(self, case: MemoryCase) -> float:
+        """期望命中的关键词里实际命中了多少。
+
+        比单看"命中/未命中"细一档：召回 5 条里只对 1 条和对 4 条，意义完全不同。
+        """
+        contents = self._retrieve_contents(case)
+        if contents is None or not case.expect_recall:
+            return 0.0
+        joined = " ".join(contents)
+        matched = sum(1 for word in case.expect_recall if word in joined)
+        return matched / len(case.expect_recall)
 
     def _trial_hallucination(self, case: MemoryCase) -> bool:
         """不该记的东西有没有被记下来。理想是 0。"""

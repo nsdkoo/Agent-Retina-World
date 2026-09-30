@@ -80,7 +80,11 @@ class RetrievalIsRealTests(unittest.TestCase):
         for case in retrieves:
             self.assertTrue(case.query, f"{case.case_id} 缺 query")
             self.assertTrue(case.seed_facts, f"{case.case_id} 缺 seed_facts")
-            self.assertTrue(case.expect_recall, f"{case.case_id} 缺 expect_recall")
+            # 期望可以用 expect_recall（该召回什么）或 forbid（不该召回什么）表达
+            self.assertTrue(
+                case.expect_recall or case.forbid,
+                f"{case.case_id} 既没写 expect_recall 也没写 forbid",
+            )
 
 
 class FactRetrieverTests(unittest.TestCase):
@@ -106,16 +110,21 @@ class FactRetrieverTests(unittest.TestCase):
         self.assertGreaterEqual(hits[0].confidence, hits[-1].confidence)
 
     def test_superseded_fact_loses_weight(self) -> None:
-        """被对账降级的旧事实，排序权重要掉下来。"""
+        """被对账降级的旧事实，排序权重要掉下来。
+
+        这里关掉相关性门槛（min_relevance=0）：本测试测的是**排序权重**，
+        不是门槛过滤，混在一起会看不出到底是哪一层出了问题。
+        """
         self.store.add_fact("preference", "用户喜欢用 Cursor", confidence=0.85)
         self.store.add_fact(
             "preference", "用户改用：VS Code", confidence=0.85,
             supersede_keyword="Cursor",
         )
-        hits = FactRetriever(self.store).retrieve("编辑器", top_k=5)
+        hits = FactRetriever(self.store).retrieve("编辑器", top_k=5, min_relevance=0.0)
         contents = {item.fact.content: item.score for item in hits}
         old = next((s for c, s in contents.items() if "Cursor" in c), 0.0)
         new = next((s for c, s in contents.items() if "VS Code" in c), 0.0)
+        self.assertGreater(new, 0.0, "新事实没被召回，测试前提不成立")
         self.assertLess(old, new, "旧偏好降级后排序权重没有掉下来")
 
     def test_expired_fact_decays(self) -> None:
