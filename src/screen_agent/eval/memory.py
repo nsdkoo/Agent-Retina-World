@@ -23,20 +23,30 @@ from screen_agent.eval.metrics import ClassificationReport, classification_repor
 
 @dataclass
 class MemoryCase:
-    """一条画像层评测样本。"""
+    """一条画像层评测样本。
+
+    `kind == "retrieve"` 的样本用 `seed_facts` + `query` 表达：
+    先往库里灌几条事实，再拿 `query` 去检索，看 `expect_recall` 里的内容有没有被召回。
+    这样测的才是**检索**能力；老写法（拿对话去跑抽取）测的其实是抽取。
+    """
 
     case_id: str
     kind: str                        # extract / reconcile / retrieve
-    turns: list[tuple[str, str]]     # (用户说, 助手答)
-    expect: list[str] = field(default_factory=list)   # 期望抽到 / 召回的内容
-    forbid: list[str] = field(default_factory=list)   # 期望**不**出现的内容（防幻觉）
+    turns: list[tuple[str, str]] = field(default_factory=list)
+    expect: list[str] = field(default_factory=list)     # 期望抽到 / 召回的内容
+    forbid: list[str] = field(default_factory=list)     # 期望**不**出现的内容（防幻觉）
+    seed_facts: list[dict] = field(default_factory=list)  # 检索前置：{category, content, confidence?}
+    query: str = ""                                       # 检索查询
+    expect_recall: list[str] = field(default_factory=list)  # 检索期望命中的关键词
     note: str = ""
 
     def to_row(self) -> dict:
         return {
             "case_id": self.case_id, "kind": self.kind,
             "turns": [list(t) for t in self.turns],
-            "expect": self.expect, "forbid": self.forbid, "note": self.note,
+            "expect": self.expect, "forbid": self.forbid,
+            "seed_facts": self.seed_facts, "query": self.query,
+            "expect_recall": self.expect_recall, "note": self.note,
         }
 
 
@@ -63,9 +73,18 @@ SEED_MEMORY: tuple[MemoryCase, ...] = (
     MemoryCase("m07", "reconcile",
                [("我从深圳搬到杭州了", "收到")],
                ["杭州"], ["深圳"], "城市变更同理"),
-    MemoryCase("m08", "retrieve",
-               [("我上次说的那个项目叫什么来着", "Agent 记忆系统")],
-               ["Agent 记忆系统"], [], "能不能找回之前记的"),
+    MemoryCase("m08", "retrieve", seed_facts=[
+        {"category": "project", "content": "用户在做一个 Agent 记忆系统"},
+        {"category": "preference", "content": "用户偏好深色主题"},
+    ], query="我之前说的那个项目", expect_recall=["Agent 记忆系统"], note="找回项目"),
+    MemoryCase("m10", "retrieve", seed_facts=[
+        {"category": "profile", "content": "用户名字是小林"},
+        {"category": "profile", "content": "用户在深圳"},
+    ], query="我叫什么名字", expect_recall=["小林"], note="姓名检索"),
+    MemoryCase("m11", "retrieve", seed_facts=[
+        {"category": "preference", "content": "用户喜欢用 Cursor 写代码"},
+        {"category": "preference", "content": "用户偏好浅色主题"},
+    ], query="我喜欢用什么工具写代码", expect_recall=["Cursor"], note="偏好检索"),
     MemoryCase("m09", "forbid",
                [("我猜他可能是做算法的", "嗯")],
                [], ["算法"], "猜测不能当事实记"),
@@ -138,7 +157,8 @@ class MemoryEvaluator:
         for case in cases:
             if case.kind == "retrieve":
                 report.recall_total += 1
-                if self._trial_extract(case):
+                # 改调 _trial_retrieve（真检索）——原先这里调的是 _trial_extract
+                if self._trial_retrieve(case):
                     report.recall_hits += 1
             if case.forbid:
                 report.hallucination_total += 1
@@ -175,7 +195,31 @@ class MemoryEvaluator:
         return any(word in joined for word in case.expect)
 
     def _trial_retrieve(self, case: MemoryCase) -> bool:
-        return self._trial_extract(case)
+        """真检索：先灌 `seed_facts`，再拿 `query` 去查，看期望内容有没有被召回。
+
+        老实现是 `return self._trial_extract(case)`，而 `run()` 调的又是 `_trial_extract`
+        —— 于是所谓「检索召回」测的其实是抽取，检索能力一天都没被真正测过。
+        """
+        if not case.query:
+            return False
+        store = self._fresh_store()
+        try:
+            for spec in case.seed_facts:
+                store.add_fact(
+                    spec.get("category", "entity"),
+                    spec["content"],
+                    confidence=float(spec.get("confidence", 0.7)),
+                    evidence=spec.get("evidence", "eval"),
+                )
+            from screen_agent.memory.fact_retriever import FactRetriever
+
+            hits = FactRetriever(store).retrieve(case.query, top_k=5)
+        except Exception:  # noqa: BLE001 - 单条样本失败不该炸掉整轮
+            return False
+        if not case.expect_recall:
+            return False
+        joined = " ".join(item.fact.content for item in hits)
+        return any(word in joined for word in case.expect_recall)
 
     def _trial_hallucination(self, case: MemoryCase) -> bool:
         """不该记的东西有没有被记下来。理想是 0。"""

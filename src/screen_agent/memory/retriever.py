@@ -48,6 +48,12 @@ def _overlap(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
+# 公开别名：事实级检索（fact_retriever）也用同一套分词口径。
+# 两处口径不一致的话，「同一句话在两个检索器里算出不同相关度」这种问题极难查。
+tokens_of = _tokens
+overlap_of = _overlap
+
+
 class HybridRetriever:
     W_RECENCY = 0.4
     W_IMPORTANCE = 0.3
