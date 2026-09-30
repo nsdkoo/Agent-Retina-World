@@ -27,6 +27,7 @@ from screen_agent.agent.events import Event, EventStream, EventType
 from screen_agent.agent.planner import Planner
 from screen_agent.agent.policy import Decision, PolicyEngine, ToolPermission
 from screen_agent.agent.state import AgentState, StepStatus, TaskState
+from screen_agent.agent.trace import Span, SpanRecorder
 from screen_agent.agent.trajectory import TrajectoryStore
 from screen_agent.tools.base import ActionResult
 from screen_agent.tools.registry import RiskLevel, ToolRegistry
@@ -55,6 +56,8 @@ class AgentController:
         max_parallel: int = 3,
         max_step_repeats: int = 2,
         step_timeout: float = 0.0,
+        tracer: SpanRecorder | None = None,
+        trace_content: bool = True,
     ) -> None:
         self.registry = registry
         self.planner = planner
@@ -72,6 +75,11 @@ class AgentController:
         # 协作式取消令牌。Python 没法强杀线程，只能把令牌立起来、
         # 在**步边界**检查——所以取消不是即时的，是"这一步跑完就停"
         self._cancel = threading.Event()
+        # trace：一次任务 = 一条 trace（trace_id 就是 task_id），
+        # span 全攒在内存里，收尾时一次性落库——每步都写盘太吵
+        self.tracer = tracer or SpanRecorder(content=trace_content)
+        self._spans: list[Span] = []
+        self._task_span: Span | None = None
 
     # ---- 只读视图 ----
 
@@ -96,17 +104,23 @@ class AgentController:
 
     def run(self, goal: str) -> ActionResult:
         """跑一个新任务；队列里攒着 Follow-up 的话，跑完自动接着下一个。"""
-        result = self._run_once(goal)
-        while not self.is_waiting and self._follow_ups:
-            nxt = self._follow_ups.popleft()
-            tail = self._run_once(nxt)
-            result = ActionResult(
-                success=result.success and tail.success,
-                message=f"{result.message}\n{tail.message}",
-                detail={"chained": True},
-                options=tail.options,
-            )
-        return result
+        try:
+            result = self._run_once(goal)
+            while not self.is_waiting and self._follow_ups:
+                nxt = self._follow_ups.popleft()
+                tail = self._run_once(nxt)
+                result = ActionResult(
+                    success=result.success and tail.success,
+                    message=f"{result.message}\n{tail.message}",
+                    detail={"chained": True},
+                    options=tail.options,
+                )
+            return result
+        finally:
+            # 不管走哪条路径（正常结束、规划失败、挂起）都把 trace 收掉，
+            # 否则半截 trace 在回放里看不出任务到底经历了什么
+            self._close_trace()
+            self._flush_spans()
 
     # ---- 续跑（跨进程） ----
 
@@ -127,6 +141,7 @@ class AgentController:
         self._state = state
         self._rehearse(state)
         self._cancel.clear()      # 续跑是新的一次执行，别带着上次的取消令牌
+        self._start_trace(state.goal, state)   # 续跑也开一条 trace，便于对比两次执行
         self._publish(
             EventType.USER_MESSAGE,
             {"text": f"（续跑）{state.goal}", "resume": True},
@@ -189,11 +204,27 @@ class AgentController:
 
     # ---- 主循环 ----
 
+    def _start_trace(self, goal: str, state: AgentState) -> None:
+        """开一条新 trace。一次任务 = 一条 trace，trace_id 直接用 task_id。"""
+        self._spans = []
+        self._task_span = self.tracer.agent_span(goal, trace_id=state.task_id)
+        self._spans.append(self._task_span)
+
+    def _flush_spans(self) -> None:
+        """把攒下的 span 落库。可观测性失败不能影响任务本身的收尾。"""
+        if self.trajectory is None or not self._spans:
+            return
+        try:
+            self.trajectory.save_spans(self._spans)
+        except Exception:  # noqa: BLE001
+            logger.debug("trace 落盘失败", exc_info=True)
+
     def _run_once(self, goal: str) -> ActionResult:
         state = AgentState(goal=goal)
         self._state = state
         self._seen.clear()
         self._cancel.clear()
+        self._start_trace(goal, state)
         self._publish(EventType.USER_MESSAGE, {"text": goal}, state)
 
         self._transition(state, TaskState.PLANNING)
@@ -263,6 +294,7 @@ class AgentController:
                 continue
 
             decision, reason = self.policy.judge(spec, step.params)
+            self._record_guardrail(step, decision, reason)
             if decision is Decision.DENY:
                 self._mark(step, StepStatus.SKIPPED, reason or "被策略拒绝", False)
                 state.cursor += 1
@@ -322,6 +354,22 @@ class AgentController:
         state.cursor += len(group)
         self._persist(state)
 
+    def _record_guardrail(self, step, decision, reason: str) -> None:  # noqa: ANN001
+        """把权限判定也记成 span。
+
+        审批门是运行时强制的，每次判定都该留痕——出问题时
+        「为什么这步被拦了」和「为什么这步没拦」是最常要回答的两个问题。
+        """
+        if self._task_span is None:
+            return
+        span = self.tracer.guardrail_span(
+            decision.value, reason,
+            trace_id=self._task_span.trace_id, parent=self._task_span,
+            mode=self.policy.mode.value, step_index=step.index,
+        )
+        self.tracer.finish(span)
+        self._spans.append(span)
+
     def _run_one(self, step) -> None:
         state = self._state
         assert state is not None
@@ -334,13 +382,40 @@ class AgentController:
         self._publish(EventType.ACTION, {
             "goal": step.goal, "tool": step.tool, "params": step.params, "why": step.why,
         }, self._state, step.index + 1)
+        span = self._open_tool_span(step)
         if self.step_timeout and self.step_timeout > 0:
-            return self._invoke_with_timeout(step)
-        try:
-            return self.registry.run(step.tool, **step.params)
-        except Exception as exc:  # noqa: BLE001 - 工具层异常统一转成失败观察
-            logger.exception("工具执行异常：%s", step.tool)
-            return ActionResult(success=False, message=f"执行失败：{exc}")
+            result = self._invoke_with_timeout(step)
+        else:
+            try:
+                result = self.registry.run(step.tool, **step.params)
+            except Exception as exc:  # noqa: BLE001 - 工具层异常统一转成失败观察
+                logger.exception("工具执行异常：%s", step.tool)
+                result = ActionResult(success=False, message=f"执行失败：{exc}")
+        self._close_tool_span(span, result)
+        return result
+
+    def _open_tool_span(self, step) -> Span | None:  # noqa: ANN001
+        if self._task_span is None:
+            return None
+        spec = self.registry.get(step.tool)
+        span = self.tracer.tool_span(
+            step.tool, step.params,
+            trace_id=self._task_span.trace_id, parent=self._task_span,
+            step_index=step.index, risk=spec.risk.name if spec is not None else "",
+        )
+        self._spans.append(span)
+        return span
+
+    def _close_tool_span(self, span: Span | None, result: ActionResult) -> None:
+        """收 span。内容（输出摘要）进 events，不进 attributes。"""
+        if span is None:
+            return
+        self.tracer.event(span, "output", {
+            "result.message": (result.message or "")[:200],
+            "success": bool(result.success),
+            "error_kind": result.error_kind,
+        })
+        self.tracer.finish(span, "ok" if result.success else "error")
 
     def _invoke_with_timeout(self, step) -> ActionResult:
         """带超时执行一步。
@@ -496,6 +571,8 @@ class AgentController:
         self._persist(state)
         summary = state.summary()
         self._publish(EventType.FINISH, {"summary": summary, "cancelled": True}, state)
+        self._close_trace("cancelled")
+        self._flush_spans()
         return ActionResult(success=False, message=summary, detail={"cancelled": True})
 
     # ---- 收尾 ----
@@ -516,7 +593,14 @@ class AgentController:
         state.finish(summary)
         self._publish(EventType.FINISH, {"summary": summary}, state)
         self._persist(state)
+        self._close_trace("ok")
+        self._flush_spans()
         return ActionResult(success=not failed, message=summary, detail={"task_id": state.task_id})
+
+    def _close_trace(self, status: str = "ok") -> None:
+        """给任务级 span 收尾。没收尾的 span 在回放里看不出这任务到底成没成。"""
+        if self._task_span is not None and self._task_span.end_ts is None:
+            self.tracer.finish(self._task_span, status)
 
     # ---- 事件与持久化 ----
 

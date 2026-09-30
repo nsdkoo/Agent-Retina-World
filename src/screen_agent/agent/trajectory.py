@@ -13,13 +13,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 
 from screen_agent.agent.events import Event
-from screen_agent.agent.state import AgentState, StepRecord, StepStatus, TaskState
+from screen_agent.agent.state import AgentState, TaskState
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -57,6 +59,19 @@ CREATE TABLE IF NOT EXISTS events (
     ts       REAL
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id);
+CREATE TABLE IF NOT EXISTS spans (
+    span_id        TEXT PRIMARY KEY,
+    trace_id       TEXT NOT NULL,
+    parent_span_id TEXT,
+    name           TEXT,
+    kind           TEXT,
+    start_ts       REAL,
+    end_ts         REAL,
+    status         TEXT,
+    attributes     TEXT,
+    events         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_spans_trace ON spans(trace_id);
 """
 
 _UNFINISHED = (
@@ -77,8 +92,8 @@ _MIGRATIONS = (
 )
 
 
-def _safe_params(raw: str | None) -> dict:
-    """解析 params。一条脏数据不该让整个任务恢复不了，所以失败就返回空 dict。"""
+def _safe_json(raw: str | None) -> dict:
+    """解析 JSON 对象。一条脏数据不该让整个任务恢复不了 / 回放不了，所以失败返回空 dict。"""
     if not raw:
         return {}
     try:
@@ -91,6 +106,27 @@ def _safe_params(raw: str | None) -> dict:
 def _column(row: sqlite3.Row, name: str) -> str | None:
     """读可能不存在的列——老库在迁移之前没有 started_at / ended_at。"""
     return row[name] if name in row.keys() else None
+
+
+def _span_row(row: sqlite3.Row) -> dict:
+    """把 spans 表的一行还原成 dict。events 是数组、attributes 是对象，分开解析。"""
+    raw_events = row["events"]
+    try:
+        events = json.loads(raw_events) if raw_events else []
+    except (TypeError, ValueError):
+        events = []
+    return {
+        "span_id": row["span_id"],
+        "trace_id": row["trace_id"],
+        "parent_span_id": row["parent_span_id"],
+        "name": row["name"],
+        "kind": row["kind"],
+        "start_ts": row["start_ts"],
+        "end_ts": row["end_ts"],
+        "status": row["status"],
+        "attributes": _safe_json(row["attributes"]),
+        "events": events if isinstance(events, list) else [],
+    }
 
 
 class TrajectoryStore:
@@ -199,7 +235,7 @@ class TrajectoryStore:
                     "index": r["idx"],
                     "goal": r["goal"] or "",
                     "tool": r["tool"] or "",
-                    "params": _safe_params(r["params"]),
+                    "params": _safe_json(r["params"]),
                     "why": r["why"] or "",
                     "status": r["status"],
                     "observation": r["observation"] or "",
@@ -231,3 +267,117 @@ class TrajectoryStore:
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- trace / 回放 ----
+    # events 表以前**只写不读**，相当于花了写盘的钱却没换来任何排障能力；
+    # spans 表是这次新加的，两者合起来才支撑得起「回放一次执行」。
+
+    def save_spans(self, spans: list) -> None:
+        """落 span。失败只记 debug——**可观测性不能反过来拖垮主流程**。"""
+        if not spans:
+            return
+        try:
+            with self._connect() as conn:
+                conn.executemany(
+                    """INSERT OR REPLACE INTO spans
+                       (span_id, trace_id, parent_span_id, name, kind,
+                        start_ts, end_ts, status, attributes, events)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        (
+                            s.span_id, s.trace_id, s.parent_span_id, s.name, s.kind,
+                            s.start_ts, s.end_ts, s.status,
+                            json.dumps(s.attributes, ensure_ascii=False),
+                            json.dumps(s.events, ensure_ascii=False),
+                        )
+                        for s in spans
+                    ],
+                )
+        except (sqlite3.Error, TypeError, AttributeError):
+            logger.debug("span 落盘失败", exc_info=True)
+
+    def read_spans(self, task_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM spans WHERE trace_id=? ORDER BY start_ts", (task_id,)
+            ).fetchall()
+        return [_span_row(r) for r in rows]
+
+    def read_events(self, task_id: str, kind: str | None = None,
+                    limit: int | None = None) -> list[dict]:
+        """读事件。补上「events 表只写不读」这个缺口。"""
+        sql = "SELECT * FROM events WHERE task_id=?"
+        args: list = [task_id]
+        if kind:
+            sql += " AND kind=?"
+            args.append(kind)
+        sql += " ORDER BY id"
+        if limit:
+            sql += " LIMIT ?"
+            args.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(sql, args).fetchall()
+        return [
+            {
+                "kind": r["kind"], "step": r["step"], "ts": r["ts"],
+                "payload": _safe_json(r["payload"]),
+            }
+            for r in rows
+        ]
+
+    def replay(self, task_id: str) -> list[dict]:
+        """把一次任务还原成一条按时间排序的时间线，供人眼看。
+
+        合并两个来源：spans（结构化执行）与 events（事件流快照）。
+        从上到下读一遍就能回答「这任务到底经历了什么」。
+        """
+        timeline: list[dict] = []
+        for span in self.read_spans(task_id):
+            start = span.get("start_ts") or 0.0
+            end = span.get("end_ts") or start
+            timeline.append({
+                "at": start,
+                "type": "span",
+                "name": span.get("name"),
+                "kind": span.get("kind"),
+                "status": span.get("status"),
+                "duration_ms": int((end - start) * 1000),
+                "attributes": span.get("attributes") or {},
+                "events": span.get("events") or [],
+            })
+        for event in self.read_events(task_id):
+            timeline.append({
+                "at": event.get("ts") or 0.0,
+                "type": "event",
+                "name": event.get("kind"),
+                "kind": "event",
+                "step": event.get("step", 0),
+                "attributes": event.get("payload") or {},
+                "events": [],
+            })
+        timeline.sort(key=lambda item: item["at"])
+        return timeline
+
+    def export_otel(self, task_id: str) -> list[dict]:
+        """导出成贴近 OTLP 的形状。
+
+        字段名按 OTel 的来（traceId / spanId / startTimeUnixNano…），
+        将来真要接 Collector，补一个 exporter 就够，数据层不用再动。
+        """
+        exported = []
+        for span in self.read_spans(task_id):
+            start = span.get("start_ts") or 0.0
+            end = span.get("end_ts") or start
+            exported.append({
+                "traceId": span.get("trace_id"),
+                "spanId": span.get("span_id"),
+                "parentSpanId": span.get("parent_span_id") or "",
+                "name": span.get("name"),
+                "kind": span.get("kind"),
+                "startTimeUnixNano": int(start * 1_000_000_000),
+                "endTimeUnixNano": int(end * 1_000_000_000),
+                "status": {"code": span.get("status")},
+                "attributes": span.get("attributes") or {},
+                "events": span.get("events") or [],
+            })
+        return exported
