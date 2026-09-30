@@ -379,6 +379,36 @@ class RunSuggestionTests(unittest.TestCase):
         self.assertIsNone(assistant.run_suggestion(s))
         self.assertEqual(assistant.commands, [], "不认识的动作不该乱提交")
 
+    def test_accepts_dict_shape(self) -> None:
+        """**面板转一圈回来的是 dict**，两条入口都得认。
+
+        气泡直接传对象，面板要经 UI 序列化再传回来——只认一种形状的话，
+        面板里的点击就会静默失效。
+        """
+        assistant = self._bare_assistant()
+        calls: list[str] = []
+
+        class _FakeAgent:
+            def resume_from(self, task_id: str):  # noqa: ANN202
+                calls.append(task_id)
+                return "resumed"
+
+        assistant.agent = _FakeAgent()
+        payload = {"kind": "resume", "what": "接着做", "why": "中断了",
+                   "action": {"kind": "resume", "task_id": "t-dict"}}
+        self.assertEqual(assistant.run_suggestion(payload), "resumed")
+        self.assertEqual(calls, ["t-dict"])
+
+    def test_dict_without_action_returns_none(self) -> None:
+        assistant = self._bare_assistant()
+        self.assertIsNone(assistant.run_suggestion({"kind": "habit", "what": "x"}))
+        self.assertEqual(assistant.commands, [])
+
+    def test_dict_intention_goes_through_command_path(self) -> None:
+        assistant = self._bare_assistant()
+        assistant.run_suggestion({"action": {"kind": "intention", "content": "交周报"}})
+        self.assertEqual(assistant.commands, ["交周报"])
+
 
 if __name__ == "__main__":
     unittest.main()

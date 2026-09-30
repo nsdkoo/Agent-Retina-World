@@ -11,7 +11,7 @@ from __future__ import annotations
 import html
 from typing import Any, Callable
 
-from PyQt6.QtCore import QAbstractListModel, QModelIndex, QRect, QSize, Qt
+from PyQt6.QtCore import QAbstractListModel, QModelIndex, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QTextDocument, QTextOption
 from PyQt6.QtWidgets import QAbstractItemView, QListView, QStyleOptionViewItem, QStyledItemDelegate
 
@@ -20,6 +20,7 @@ KIND_BOT = "Bot"
 KIND_INFO = "Info"
 
 REVEAL_ROLE = int(Qt.ItemDataRole.UserRole) + 1  # 流式出字位置（None=非流式）
+ACTION_ROLE = int(Qt.ItemDataRole.UserRole) + 2  # 这条消息可点的动作（None=不可点）
 _FADE_TAIL = 6                                    # 尾部渐入字符数
 
 _PAD_V = 4
@@ -50,12 +51,20 @@ class MessageModel(QAbstractListModel):
             return item["kind"]
         if role == REVEAL_ROLE:
             return item.get("reveal")
+        if role == ACTION_ROLE:
+            return item.get("action")
         return None
 
-    def add_message(self, kind: str, text: str, reveal: int | None = None) -> None:
+    def add_message(self, kind: str, text: str, reveal: int | None = None,
+                    action: dict | None = None) -> None:
+        """加一条消息。
+
+        `action` 不为空表示这条**可以点**（点击后执行该动作）。
+        存结构化 dict 而不是拼个字符串——动作最终要按下标参数调真实方法。
+        """
         row = len(self._items)
         self.beginInsertRows(QModelIndex(), row, row)
-        self._items.append({"kind": kind, "text": text, "reveal": reveal})
+        self._items.append({"kind": kind, "text": text, "reveal": reveal, "action": action})
         self.endInsertRows()
 
     def set_last_text(self, text: str, reveal: int | None = None) -> None:
@@ -174,7 +183,14 @@ class MessageDelegate(QStyledItemDelegate):
 
 
 class MessageView(QListView):
-    """透明消息列表：组装 model + delegate，附自动滚底与内容高度计算。"""
+    """透明消息列表：组装 model + delegate，附自动滚底与内容高度计算。
+
+    `action_clicked` 会在用户点了**带动作的那条消息**时发出。
+    自绘列表本来不处理点击（delegate 只管画），所以要自己在 `mousePressEvent`
+    里定位命中了哪一行 —— 这是「面板里的建议也能点」的落点。
+    """
+
+    action_clicked = pyqtSignal(dict)
 
     def __init__(self, palette: dict, on_content_change: Callable[[], None] | None = None) -> None:
         super().__init__()
@@ -206,11 +222,28 @@ class MessageView(QListView):
         self._delegate.set_palette(t)
         self._model.layoutChanged.emit()
 
-    def add_message(self, kind: str, text: str, reveal: int | None = None) -> None:
-        self._model.add_message(kind, text, reveal)
+    def add_message(self, kind: str, text: str, reveal: int | None = None,
+                    action: dict | None = None) -> None:
+        self._model.add_message(kind, text, reveal, action)
         self.scrollToBottom()
         if self._on_content_change:
             self._on_content_change()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        """点消息列表：命中带动作的那条就发信号。
+
+        **只处理左键**；右键要留给列表自己的行为（选择、右键菜单）。
+        delegate 是自绘的，命中判断只能靠 `indexAt` 拿行号，
+        再回头问 model 这一行有没有 action —— 没有就照常交给父类。
+        """
+        if event.button() == Qt.MouseButton.LeftButton:
+            index = self.indexAt(event.position().toPoint())
+            if index.isValid():
+                action = index.data(ACTION_ROLE)
+                if action:
+                    self.action_clicked.emit(dict(action))
+                    return                      # 命中就别再冒泡，避免误触发选择
+        super().mousePressEvent(event)
 
     def stream_last(self, text: str, reveal: int | None = None) -> None:
         self._model.set_last_text(text, reveal)

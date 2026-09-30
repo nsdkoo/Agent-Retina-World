@@ -364,6 +364,9 @@ class QtFloatingBall:
             on_model_change=on_model_change,
             theme=resolve_theme(theme_choice),
             wake_hint=wake_hint,
+            # 面板里点了带动作的消息（主动建议）→ 和气泡走同一条执行路径，
+            # **照样过权限审批**，不因为入口不同就开小门
+            on_action=self._run_action,
         )
         panel.setWindowOpacity(0.0)
         if switchable:
@@ -574,6 +577,33 @@ class QtFloatingBall:
         panel.move(x, y)
         self._fade_panel(True)
         panel.focus_input()
+
+    def _run_action(self, action: dict) -> None:
+        """执行面板里点中的动作（和气泡点击同一个入口）。
+
+        跑在独立线程，和 `_submit_text` 一致 —— 执行可能挂起等确认或跑一会儿，
+        占住 UI 线程会卡界面。
+
+        **入口不同、路径相同**：最终都走 `run_suggestion` → 照常过权限审批。
+        """
+        if not action:
+            return
+        import threading
+
+        def job() -> None:
+            try:
+                self.assistant.set_status("processing")
+                result = self.assistant.run_suggestion({"action": action})
+                if result is not None and getattr(result, "message", ""):
+                    self.assistant.emit_result(result.message)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("面板动作执行失败")
+            finally:
+                self.assistant.set_status("idle")
+
+        threading.Thread(target=job, daemon=True).start()
 
     def _submit_text(self, text: str) -> None:
         """打字输入：与语音共用 handle_command，跑在独立线程。"""

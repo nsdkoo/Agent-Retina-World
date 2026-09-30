@@ -344,7 +344,10 @@ class VoiceAssistant:
         self._on_foresight = cb
 
     def run_suggestion(self, suggestion) -> ActionResult | None:  # noqa: ANN001
-        """执行一条主动建议（气泡被点击时调）。
+        """执行一条主动建议（气泡或面板被点击时调）。
+
+        `suggestion` 可以是 `Suggestion` 对象，也可以是**已序列化的 dict** ——
+        经 UI 转一圈回来的是 dict，两条入口都得认。
 
         **主动建议不是特权通道** —— 它照样过和别人一样的门：
         续跑走 `controller.resume_from`（内部照常判权限、照常挂起等确认），
@@ -352,7 +355,8 @@ class VoiceAssistant:
 
         这样「主动」就不会变成「绕过审批」的借口。主动不等于自作主张。
         """
-        action = getattr(suggestion, "action", None)
+        action = suggestion.get("action") if isinstance(suggestion, dict) \
+            else getattr(suggestion, "action", None)
         if not action:
             return None                     # 只能看不能点的建议（比如纯提示）
 

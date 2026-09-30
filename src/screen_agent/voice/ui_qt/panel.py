@@ -293,6 +293,7 @@ class ChatPanel(QWidget):
         on_model_change: Callable[[str], None] | None = None,
         theme: str = "light",
         wake_hint: str = "喊「瑞塔」",
+        on_action: Callable[[dict], None] | None = None,
     ) -> None:
         super().__init__(
             None,
@@ -304,6 +305,10 @@ class ChatPanel(QWidget):
         self._theme = theme
         self.setStyleSheet(build_style(theme))
         self._on_submit_text = on_submit_text
+        # 面板里带动作的消息（比如主动建议）点一下要能执行。
+        # **单独一路而不是复用 on_submit_text** —— 提交的是文本，执行的是动作
+        # （`resume_from(task_id)` 这种），两者的形状不一样
+        self._on_action = on_action
         self._activity_fn = activity_fn
         self._on_height_changed = on_height_changed
         self._model_options = list(model_options or [])
@@ -356,6 +361,8 @@ class ChatPanel(QWidget):
         root.addWidget(self._reply_divider)
 
         self._scroll = MessageView(THEMES.get(theme, THEMES["light"]), on_content_change=self._grow_reply_card)
+        # 点了带动作的消息（比如主动建议）→ 转给外面执行
+        self._scroll.action_clicked.connect(self._on_action_clicked)
         self._scroll.setObjectName("ReplyCard")
         self._scroll.setFixedHeight(0)
         self._scroll.hide()
@@ -553,11 +560,12 @@ class ChatPanel(QWidget):
 
     # ---- 对话流 ----
 
-    def add_bubble(self, text: str, kind: str) -> None:
+    def add_bubble(self, text: str, kind: str, action: dict | None = None) -> None:
+        """加一条气泡。`action` 不为空则这条**可点**（点击执行该动作）。"""
         if not text:
             return
         self._greeting.hide()
-        self._scroll.add_message(kind, text)
+        self._scroll.add_message(kind, text, action=action)
         QTimer.singleShot(0, self._grow_reply_card)
 
     # ---- 流式出字：缓冲 + 自适应速率 + 尾部渐入（ChatGPT 式 smooth reveal）----
@@ -624,6 +632,15 @@ class ChatPanel(QWidget):
 
     # ---- 需要用户拍板：候选按钮 ----
 
+    def _on_action_clicked(self, action: dict) -> None:
+        """面板里有动作的消息被点了。
+
+        **执行走的是和气泡同一条路** —— 都交给外面那个 run_suggestion，
+        照样过权限审批。不能因为入口不同就走两套逻辑。
+        """
+        if self._on_action:
+            self._on_action(action)
+
     def _on_progress(self, text: str) -> None:
         """任务执行进度：走 Info 气泡（灰色小字），不抢正文位置、不播报。"""
         self.add_info(text)
@@ -641,9 +658,11 @@ class ChatPanel(QWidget):
             if not what:
                 continue
             why = (item or {}).get("why") or ""
-            hint = "（可点击执行）" if (item or {}).get("action") else ""
+            action = (item or {}).get("action")
+            hint = "　（点一下执行）" if action else ""
             text = f"{what}{hint}" + (f"\n{why}" if why else "")
-            self.add_bubble(text, "Info")
+            # 带上 action，这条就变成可点的 —— 面板里的建议和气泡里的能力对齐
+            self.add_bubble(text, "Info", action=action)
 
     def _on_foresight(self, look: dict) -> None:
         """后果预演：**面板里留一条**，别只在气泡闪一下就没了。
