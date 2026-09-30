@@ -15,7 +15,7 @@ STATIC_DIR = WEB_ROOT / "static"
 
 def create_app(config_path: Path) -> FastAPI:
     pipeline = PerceptionPipeline.from_config(config_path)
-    app = FastAPI(title="Agent-Retina-World", version="0.3.0")
+    app = FastAPI(title="Agent-Retina", version="0.3.0")
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -26,7 +26,7 @@ def create_app(config_path: Path) -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "project": "Agent-Retina-World"}
+        return {"status": "ok", "project": "Agent-Retina"}
 
     @app.get("/api/events")
     def events(limit: int = 50) -> dict:

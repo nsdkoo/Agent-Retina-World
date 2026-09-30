@@ -1,4 +1,4 @@
-# Agent-Retina-World 记忆系统 v2 设计
+# Agent-Retina 记忆系统 v2 设计
 
 > 对标 Letta / Mem0 / Zep / Generative Agents，2026-09-29 深度调研后重设计。
 > 本文是评估 + 架构 + 路线图，代码见 `src/screen_agent/memory/`。
