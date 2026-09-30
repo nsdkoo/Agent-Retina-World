@@ -56,7 +56,13 @@ python scripts/archive_plans.py
 - **提交信息写动机**，不只是「改了什么」。好例子：
   `fix: 隐私评测恒真（两个多月来门禁从未生效过）`。
 - `data/` 是运行时数据，不进 Git。
-- 改品牌名 / 项目名时，`docs/plans/` 里的**历史归档不要动** —— 那是在记录历史，
-  当时的名字就是当时的名字。
-- 这个项目已经改过一次名（`Agent-Retina-World` → `Agent-Rita`），
-  认历史文档时要能认出旧名。
+- **改品牌名 / 项目名时，`docs/plans/` 里的历史归档不要动** —— 那是在记录历史，
+  当时的名字就是当时的名字。改了反而失真。
+- 本项目改过两次名：`Agent-Retina-World` → `Agent-Retina` → `Agent-Rita`。
+  **GitHub 仓库与本地目录已于 2026-09-30 统一为 `Agent-Rita`**：
+  - 远端：`https://github.com/nsdkoo/Agent-Rita`
+  - 本地：`D:\素材存储\Agent-Rita`
+  - 认历史文档时要能认出两个旧名（`.plan-archive.json` 里声明了）
+- **`.venv` 不用重建也不用修**：Python 3.13 的 venv 是可重定位的，
+  改目录名后 `python.exe` / `pip` / 依赖全部照常工作（实测 354 测试全过）。
+  以后再遇到改目录名不用先慌着删 venv —— 先跑一次测试看实际有没有坏。
