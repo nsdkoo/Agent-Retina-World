@@ -3,6 +3,36 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。  
 详细过程见 [development-journal.md](development-journal.md)。
 
+## [1.1.0] - 2026-09-30
+
+### 新增
+
+- **文件内容层**（对标 Codex / WorkBuddy 的 read / write / edit / grep / glob）：
+  - `files.read` 读文本内容：带行号、支持分页、512KB 上限、二进制自动识破
+  - `files.write` 写文件：覆盖前自动备份到 `data/backups/`，可撤销；支持 append
+  - `files.edit` 精确替换一处：零匹配或多匹配都拒绝——宁可不动，也不改错地方
+  - `files.grep` 按内容搜索：支持正则与扩展名过滤
+  - `files.glob` 通配符匹配路径
+- **受限命令执行** `shell.run`（对标 Codex 的 `exec_command`）：
+  - 三级分类：`deny` 直接拒（格式化 / 删盘根 / 关机 / 改注册表 / fork 炸弹）、
+    `safe` 只读放行、`ask` 其余要确认
+  - `git` 单独细分：`status` 放行，`push` / `reset --hard` / `clean -fd` 必须问
+  - 工作目录限制在白名单内，超时默认 30 秒（上限 300），输出按字符截断
+  - 照搬 Codex 的三条 Windows 安全规则：不跨 shell 组合破坏性命令、递归操作前验证
+    解析后的绝对路径、后台进程隐藏窗口
+- **额外可写根目录**：`files.set_extra_roots()` 与 `build_default_registry(extra_roots=...)`，
+  可在配置里显式放开白名单之外的目录
+- 意图层补齐：读文件 / 写文件 / 替换 / 内容搜索 / 通配匹配 / 列目录 / 执行命令
+
+### 变更
+
+- 工具总数 30 → 36
+
+### 测试
+
+- 新增 `tests/test_tools_shell.py`（14 例），全仓 156 例
+- 新增 `scripts/live_test_file_ops.py`：39 项实战验证脚本，全程沙箱、不碰真实目录
+
 ## [1.0.0] - 2026-09-30
 
 ### 新增

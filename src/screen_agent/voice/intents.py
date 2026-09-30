@@ -181,6 +181,89 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
             tool="files.delete", params={"path": rm_m.group(1).strip()},
         )
 
+    # ---- 文件内容层：读 / 写 / 改 / 搜 / 匹配（对标 Codex 的 read/write/edit/grep/glob）----
+    read_m = re.search(r"(?:读一下|读读|读取|念一下|看一下内容)\s*(.+)", text)
+    if read_m:
+        return Intent(
+            IntentType.FILE_OP, target=read_m.group(1).strip(), raw_command=text,
+            tool="files.read", params={"path": read_m.group(1).strip()},
+        )
+    look_m = re.search(r"(?:看看|瞧瞧)\s*(.+?)\s*(?:里|中)?\s*(?:写的|写了|有什么|的内容|内容)", text)
+    if look_m:
+        return Intent(
+            IntentType.FILE_OP, target=look_m.group(1).strip(), raw_command=text,
+            tool="files.read", params={"path": look_m.group(1).strip()},
+        )
+
+    grep_m = re.search(r"在\s*(.+?)\s*(?:里|中|里面)\s*(?:搜|搜索|查找|找)\s*(?:有没有|是否有|包含)?\s*(.+)", text)
+    if grep_m:
+        return Intent(
+            IntentType.FILE_OP, target=grep_m.group(1).strip(), raw_command=text,
+            tool="files.grep", params={"pattern": grep_m.group(2).strip(), "path": grep_m.group(1).strip()},
+        )
+    grep_m2 = re.search(r"(?:搜|搜索|查找)\s*(.+?)\s*(?:里|中|里面)\s*(?:有没有|是否有|包含)\s*(.+)", text)
+    if grep_m2:
+        return Intent(
+            IntentType.FILE_OP, target=grep_m2.group(1).strip(), raw_command=text,
+            tool="files.grep", params={"pattern": grep_m2.group(2).strip(), "path": grep_m2.group(1).strip()},
+        )
+
+    glob_m = re.search(r"([^\s]*\*[^\s]*)", text)
+    if glob_m and re.search(r"列出|找出|有哪些|找所有|看看有", text):
+        folder = ""
+        for alias in ("桌面", "下载", "文档", "图片", "视频", "音乐"):
+            if alias in text:
+                folder = alias
+                break
+        return Intent(
+            IntentType.FILE_OP, target=glob_m.group(1), raw_command=text,
+            tool="files.glob", params={"pattern": glob_m.group(1), "path": folder},
+        )
+
+    write_m = re.search(r"把\s*(.+?)\s*(?:写到|写进|存到|保存到)\s*(.+)", text)
+    if write_m:
+        return Intent(
+            IntentType.FILE_OP, target=write_m.group(2).strip(), raw_command=text,
+            tool="files.write",
+            params={"path": write_m.group(2).strip(), "content": write_m.group(1).strip()},
+        )
+    write_m2 = re.search(r"在\s*(.+?)\s*(?:里|中)\s*写(?:上|入|下)\s*(.+)", text)
+    if write_m2:
+        return Intent(
+            IntentType.FILE_OP, target=write_m2.group(1).strip(), raw_command=text,
+            tool="files.write",
+            params={"path": write_m2.group(1).strip(), "content": write_m2.group(2).strip()},
+        )
+
+    edit_m = re.search(r"把\s*(.+?)\s*(?:里|中)的\s*(.+?)\s*(?:改成|改为|替换成|换成)\s*(.+)", text)
+    if edit_m:
+        return Intent(
+            IntentType.FILE_OP, target=edit_m.group(1).strip(), raw_command=text,
+            tool="files.edit",
+            params={
+                "path": edit_m.group(1).strip(),
+                "old_text": edit_m.group(2).strip(),
+                "new_text": edit_m.group(3).strip(),
+            },
+        )
+
+    list_m = re.search(
+        r"(?:列出|看看|显示|查看)\s*(桌面|下载|文档|图片|视频|音乐)(?:里|上|下|中|里面)?\s*(?:的)?\s*(?:文件|内容|东西)?",
+        text,
+    )
+    if list_m:
+        return Intent(
+            IntentType.FILE_OP, target=list_m.group(1), raw_command=text,
+            tool="files.list", params={"path": list_m.group(1)},
+        )
+
+    shell_m = re.search(r"^(?:执行|运行|跑)\s*(?:一下)?\s*(?:命令|指令|脚本)?\s*[:：]?\s*(.+)", text)
+    if shell_m:
+        return Intent(
+            IntentType.FILE_OP, target=shell_m.group(1).strip(), raw_command=text,
+            tool="shell.run", params={"cmd": shell_m.group(1).strip()},
+        )
+
     if re.search(r"(?:列出|看看|有哪些)(?:打开的)?窗口", text):
         return Intent(IntentType.LIST_WINDOWS, raw_command=text, tool="win.list")
     focus_m = re.search(r"(?:切换|切)(?:到|至)\s*(.+?)(?:的)?(?:窗口|界面)?$", text)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from screen_agent.tools import clipboard, dialog, files, input, system, volume, windows
+from screen_agent.tools import clipboard, dialog, files, input, shell, system, volume, windows
 from screen_agent.tools.apps import AppResolver
 from screen_agent.tools.registry import RiskLevel, ToolRegistry, ToolSpec
 from screen_agent.voice.executor import ActionResult
@@ -14,10 +14,14 @@ from screen_agent.voice.executor import ActionResult
 def build_default_registry(
     app_resolver: AppResolver | None = None,
     confirm_fn: Callable[[ToolSpec, dict], bool] | None = None,
+    extra_roots: list[str] | None = None,
 ) -> ToolRegistry:
     resolver = app_resolver or AppResolver(
         Path(__file__).resolve().parents[3] / "data" / "cache" / "app_index.json"
     )
+    if extra_roots:
+        # 白名单之外额外放开的可写根目录（配置里显式指定；沙箱实测也从这里走）
+        files.set_extra_roots(extra_roots)
     registry = ToolRegistry(confirm_fn=confirm_fn)
     register = registry.register
 
@@ -60,6 +64,31 @@ def build_default_registry(
     register(ToolSpec("files.delete", "删除文件（放进回收站，可还原）", files.delete_path,
                       RiskLevel.HIGH, {"path": "路径"}))
     register(ToolSpec("files.undo", "撤销上一次文件操作", files.undo_last, RiskLevel.LOW))
+
+    # ---- 文件内容层：读 / 写 / 改 / 搜 / 匹配（对标 Codex · WorkBuddy 的 read/write/edit/grep/glob）----
+    register(ToolSpec("files.read", "读文件内容，返回带行号的文本", files.read_file, RiskLevel.SAFE,
+                      {"path": "文件路径", "offset": "从第几行开始（可留空）",
+                       "max_lines": "最多读多少行（可留空）"}))
+    register(ToolSpec("files.write", "把内容写进文件，覆盖前自动备份、可撤销",
+                      files.write_file, RiskLevel.LOW,
+                      {"path": "文件路径", "content": "要写入的内容",
+                       "mode": "overwrite 覆盖 / append 追加"}))
+    register(ToolSpec("files.edit", "精确替换文件里的一处内容（匹配到多处或零处都拒绝执行）",
+                      files.edit_file, RiskLevel.LOW,
+                      {"path": "文件路径", "old_text": "被替换的内容", "new_text": "替换成什么"}))
+    register(ToolSpec("files.grep", "按内容搜索文件，返回「文件:行号: 内容」",
+                      files.grep_files, RiskLevel.SAFE,
+                      {"pattern": "要搜的内容或正则", "path": "在哪个目录搜（默认桌面）",
+                       "suffix": "只搜某类文件，如 .py（可留空）"}))
+    register(ToolSpec("files.glob", "按通配符列路径，如 *.py、**/*.md",
+                      files.glob_files, RiskLevel.SAFE,
+                      {"pattern": "匹配式", "path": "在哪个目录找（默认桌面）"}))
+
+    # ---- 命令执行（对标 Codex 的 exec_command：只读放行 / 破坏性要确认 / 致命直接拒）----
+    register(ToolSpec("shell.run", "在受限工作目录里执行一条命令并返回输出",
+                      shell.run_command, RiskLevel.HIGH,
+                      {"cmd": "要执行的命令", "workdir": "工作目录（默认桌面）",
+                       "timeout": "超时秒数，默认 30", "max_output": "输出字符上限"}))
 
     # ---- 交互：把需要用户拍板的事变成可点选项 ----
     register(ToolSpec("ask.options", "需要用户拍板时提问并给出候选，别自己替用户猜",

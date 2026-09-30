@@ -93,6 +93,18 @@ class PolicyEngine:
         if override is ToolPermission.ASK_BEFORE:
             return Decision.ASK, f"「{spec.name}」被设为每次都要确认"
 
+        # 命令执行单独判：shell 内部知道自己在跑什么，只读的放行、要命的直接拒，
+        # 比"一刀切问一遍"更贴近 Codex 的分级做法
+        if spec.name == "shell.run":
+            from screen_agent.tools.shell import classify_command
+
+            level, why = classify_command(str((params or {}).get("cmd") or ""))
+            if level == "deny":
+                return Decision.DENY, why
+            if level == "safe":
+                return Decision.ALLOW, ""
+            return Decision.ASK, why
+
         # 参数里带危险字眼是最该警惕的一类：工具本身可能很常规，参数却指向意料之外的用法。
         # 它优先于所有模式与信任开关——信任工具不等于信任这次调用的参数。
         if self._dangerous_params(params):

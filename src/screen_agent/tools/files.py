@@ -20,6 +20,7 @@ import re
 import shutil
 import sys
 import time
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -41,6 +42,9 @@ _DIR_ALIASES = {
 
 # 写操作可达的根目录白名单
 _WRITE_ROOTS = ("Desktop", "Downloads", "Documents", "Pictures", "Videos", "Music")
+
+# 额外放开的可写根目录：默认空，配置里显式指定才生效（测试沙箱靠它）
+_EXTRA_ROOTS: list[Path] = []
 
 # 归档时跳过的：系统文件 + 快捷方式（桌面上放快捷方式本来就是正常状态）
 _SKIP_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
@@ -92,16 +96,39 @@ def resolve_dir(text: str = "") -> Path:
     return path
 
 
+def _write_roots() -> list[Path]:
+    roots: list[Path] = []
+    for name in _WRITE_ROOTS:
+        try:
+            roots.append(_user_dir(name).resolve())
+        except OSError:
+            continue
+    roots.extend(_EXTRA_ROOTS)
+    return roots
+
+
+def set_extra_roots(paths) -> None:  # noqa: ANN001 - 接受 str / Path / 可迭代
+    """额外放开的可写根目录（配置里显式指定才生效，默认一个都没有）。"""
+    global _EXTRA_ROOTS
+    _EXTRA_ROOTS = []
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    for item in paths or []:
+        try:
+            _EXTRA_ROOTS.append(Path(item).expanduser().resolve())
+        except (OSError, ValueError):
+            continue
+
+
 def _guard_write(target: Path) -> str | None:
     """写操作白名单校验：返回拒绝原因，None 表示放行。"""
     try:
         resolved = target.expanduser().resolve()
     except OSError:
         return f"路径没法解析：{target}"
-    for name in _WRITE_ROOTS:
-        root = _user_dir(name)
+    for root in _write_roots():
         try:
-            resolved.relative_to(root.resolve())
+            resolved.relative_to(root)
             return None
         except (ValueError, OSError):
             continue
@@ -218,6 +245,16 @@ def undo_last() -> ActionResult:
                 dst = Path(entry["dst"])
                 if dst.exists():
                     dst.unlink()
+                    restored += 1
+            elif op == "write":
+                dst = Path(entry["dst"])
+                backup = entry.get("backup")
+                if backup and Path(backup).exists():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(backup, dst)   # 覆盖过的文件：拿备份还原
+                    restored += 1
+                elif dst.exists():
+                    dst.unlink()                # 原本不存在的文件：撤销就是删掉
                     restored += 1
             elif op == "mkdir":
                 folder = Path(entry["dst"])
@@ -618,3 +655,201 @@ def organize_dir(path: str = "", mode: str = "", apply: bool = False) -> ActionR
 def organize_cancel() -> ActionResult:
     _clear_pending()
     return ActionResult(success=True, message="好，那先不动")
+
+
+# ---------------------------------------------------------------- 文件内容层
+# 上面的工具管的是「文件在哪、叫什么」；从这里往下管的是「文件里写了什么」——
+# 对标 Codex / WorkBuddy 的 read / write / edit / grep / glob。
+
+_TEXT_LIMIT_BYTES = 512 * 1024   # 单文件读取上限
+_READ_MAX_LINES = 400            # 一次最多回多少行
+_SCAN_MAX_FILES = 400            # 内容搜索最多扫多少个文件
+_SCAN_MAX_HITS = 40
+
+
+def _backup(path: Path) -> Path | None:
+    """覆盖前留个底，撤销时能还原。文件本来不存在就返回 None。"""
+    if not path.exists() or not path.is_file():
+        return None
+    backup_dir = Path(__file__).resolve().parents[3] / "data" / "backups"
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        target = backup_dir / f"{stamp}_{path.name}"
+        shutil.copy2(path, target)
+        return target
+    except OSError:
+        return None
+
+
+def _read_text(target: Path) -> tuple[str | None, str]:
+    """按 UTF-8 → GBK 依次尝试解码，都不行就当二进制拒掉。"""
+    for encoding in ("utf-8", "gbk"):
+        try:
+            return target.read_text(encoding=encoding), encoding
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return None, ""
+
+
+def read_file(path: str, offset: int = 0, max_lines: int = 0) -> ActionResult:
+    """读文本文件内容（带行号）。二进制文件直接拒绝，别把乱码灌进上下文。"""
+    target = _resolve_input(path)
+    if not target.is_file():
+        return ActionResult(success=False, message=f"不是文件：{target}")
+    size = target.stat().st_size
+    if size > _TEXT_LIMIT_BYTES:
+        return ActionResult(
+            success=False,
+            message=f"{target.name} 有 {size // 1024} KB，太大了一次读不完，告诉我你要看哪一段",
+        )
+    text, _ = _read_text(target)
+    if text is None:
+        return ActionResult(success=False, message=f"{target.name} 看着是二进制文件，读不成文本")
+    lines = text.splitlines()
+    start = max(0, int(offset or 0))
+    limit = int(max_lines or _READ_MAX_LINES)
+    chunk = lines[start : start + limit]
+    numbered = "\n".join(f"{start + i + 1:>4}| {line}" for i, line in enumerate(chunk))
+    rest = len(lines) - start - limit
+    tail = f"\n…还有 {rest} 行（想看就带 offset={start + limit}）" if rest > 0 else ""
+    return ActionResult(
+        success=True,
+        message=f"{target.name} 共 {len(lines)} 行：\n{numbered}{tail}",
+        detail={"path": str(target), "lines": len(lines), "offset": start},
+    )
+
+
+def write_file(path: str, content: str, mode: str = "overwrite") -> ActionResult:
+    """写文件：覆盖前自动备份，可撤销；追加用 mode='append'。"""
+    raw = (path or "").strip().strip("「」\"'")
+    if not raw:
+        return ActionResult(success=False, message="告诉我写到哪个文件")
+    target = _resolve_input(raw)
+    if target.is_dir():
+        return ActionResult(success=False, message=f"{target} 是个目录")
+    reason = _guard_write(target)
+    if reason:
+        return ActionResult(success=False, message=reason)
+    append = str(mode).lower().startswith("append")
+    backup = None if append else _backup(target)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a" if append else "w", encoding="utf-8") as handle:
+            handle.write(content or "")
+    except OSError as exc:
+        return ActionResult(success=False, message=f"写入失败：{exc}")
+    entry: dict = {"op": "write", "dst": str(target)}
+    if backup is not None:
+        entry["backup"] = str(backup)
+    _record([entry])
+    verb = "追加到" if append else "写入"
+    note = "，原有内容已备份，说撤销能还原" if backup else ""
+    return ActionResult(
+        success=True,
+        message=f"已{verb} {target.name}（{len(content or '')} 字）{note}",
+        detail={"path": str(target)},
+    )
+
+
+def edit_file(path: str, old_text: str, new_text: str) -> ActionResult:
+    """精确替换一处。找不到、或匹配到多处都拒绝执行——宁可不动，也别改错地方。"""
+    target = _resolve_input(path)
+    if not target.is_file():
+        return ActionResult(success=False, message=f"不是文件：{target}")
+    reason = _guard_write(target)
+    if reason:
+        return ActionResult(success=False, message=reason)
+    if not old_text:
+        return ActionResult(success=False, message="要替换的内容不能为空")
+    text, _ = _read_text(target)
+    if text is None:
+        return ActionResult(success=False, message=f"{target.name} 读不成文本，改不了")
+    count = text.count(old_text)
+    if count == 0:
+        return ActionResult(success=False, message=f"{target.name} 里没有这段内容，我没动它")
+    if count > 1:
+        return ActionResult(
+            success=False,
+            message=f"这段内容在 {target.name} 里出现了 {count} 次，说具体一点免得改错",
+        )
+    backup = _backup(target)
+    try:
+        target.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
+    except OSError as exc:
+        return ActionResult(success=False, message=f"写入失败：{exc}")
+    entry: dict = {"op": "write", "dst": str(target)}
+    if backup is not None:
+        entry["backup"] = str(backup)
+    _record([entry])
+    return ActionResult(success=True, message=f"已改好 {target.name}（可撤销）", detail={"path": str(target)})
+
+
+def grep_files(pattern: str, path: str = "", suffix: str = "") -> ActionResult:
+    """按内容找，返回「文件:行号: 那一行」。suffix 可限定扩展名，如 .py。"""
+    if not pattern:
+        return ActionResult(success=False, message="告诉我搜什么")
+    root = _resolve_input(path) if path else _user_dir("Desktop")
+    if not root.is_dir():
+        return ActionResult(success=False, message=f"不是目录：{root}")
+    try:
+        needle = re.compile(pattern)
+    except re.error:
+        needle = re.compile(re.escape(pattern))
+    wanted = suffix.lower().lstrip("*")
+    hits: list[str] = []
+    scanned = 0
+    for file in root.rglob("*"):
+        if len(hits) >= _SCAN_MAX_HITS or scanned >= _SCAN_MAX_FILES:
+            break
+        if not file.is_file():
+            continue
+        if wanted and not file.name.lower().endswith(wanted):
+            continue
+        try:
+            if file.stat().st_size > _TEXT_LIMIT_BYTES:
+                continue
+            content = file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        scanned += 1
+        for index, line in enumerate(content.splitlines(), 1):
+            if needle.search(line):
+                try:
+                    shown = file.relative_to(root)
+                except ValueError:
+                    shown = file
+                hits.append(f"{shown}:{index}: {line.strip()[:100]}")
+                if len(hits) >= _SCAN_MAX_HITS:
+                    break
+    if not hits:
+        return ActionResult(
+            success=False,
+            message=f"在 {root.name} 里没搜到「{pattern}」（扫了 {scanned} 个文件）",
+        )
+    return ActionResult(
+        success=True,
+        message=f"找到 {len(hits)} 处：\n" + "\n".join(hits),
+        detail={"hits": hits, "scanned": scanned},
+    )
+
+
+def glob_files(pattern: str, path: str = "") -> ActionResult:
+    """按通配符找路径，比如 *.py、**/*.md。"""
+    if not pattern:
+        return ActionResult(success=False, message="给我一个匹配式，比如 *.py")
+    root = _resolve_input(path) if path else _user_dir("Desktop")
+    if not root.is_dir():
+        return ActionResult(success=False, message=f"不是目录：{root}")
+    try:
+        matches = sorted(root.glob(pattern))[:_SCAN_MAX_HITS]
+    except (OSError, ValueError) as exc:
+        return ActionResult(success=False, message=f"匹配式有问题：{exc}")
+    if not matches:
+        return ActionResult(success=False, message=f"{root.name} 里没有匹配 {pattern} 的路径")
+    listing = "\n".join(f"- {m.relative_to(root)}" for m in matches)
+    return ActionResult(
+        success=True,
+        message=f"匹配到 {len(matches)} 项：\n{listing}",
+        detail={"matches": [str(m) for m in matches]},
+    )

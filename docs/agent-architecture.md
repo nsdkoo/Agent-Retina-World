@@ -45,10 +45,29 @@ flowchart TB
 | --- | --- | --- |
 | `agent/events.py` | 事件总线 + 事件类型（plan / action / observation / ask / state_changed / finish） | OpenHands EventStream、Pi 的审计轨迹 |
 | `agent/state.py` | 任务状态机（9 态，非法跳转直接拒）+ 步骤记录 + 断点游标 | OpenHands AgentState、Cline TaskState |
-| `agent/policy.py` | 四种权限模式 + 工具级覆盖 + 危险参数拦截 | block/goose 的 GooseMode 与 PermissionLevel |
+| `agent/policy.py` | 四种权限模式 + 工具级覆盖 + 危险参数拦截 + 命令分级 | block/goose 的 GooseMode 与 PermissionLevel |
 | `agent/planner.py` | 复合句切分给意图层试跑；切不动交 LLM 出 JSON 并强校验 | Cline Plan 模式 |
 | `agent/controller.py` | 主循环：规划 → 逐步执行 → 审批挂起 → 恢复 → 汇总 | OpenHands AgentController |
 | `agent/trajectory.py` | 任务 / 步骤 / 事件落 SQLite，支持续跑 | Cline 任务持久化、Pi 的 JSONL 会话 |
+| `tools/files.py` | 文件系统层（列 / 找 / 归档 / 移动 / 复制 / 重命名 / 回收站删除 / 撤销）+ 内容层（读 / 写 / 改 / 搜 / 匹配） | Codex 的 read/write/edit/grep/glob |
+| `tools/shell.py` | 受限命令执行：deny / safe / ask 三级 | Codex 的 exec_command |
+
+## 命令执行的分级
+
+`shell.run` 不搞一刀切，按 Codex 的思路分三级（判定在 `shell.classify_command`，
+放行决策仍在 `PolicyEngine`，只有一处说了算）：
+
+| 级别 | 例子 | 处理 |
+| --- | --- | --- |
+| `deny` | `rm -rf /`、`format D:`、`shutdown`、`reg delete`、`takeown`、fork 炸弹 | 直接拒绝，命令根本不会执行 |
+| `safe` | `dir`、`type`、`git status`、`where`、`tasklist` | 放行，不打扰 |
+| `ask` | `rm`、`move`、`git push --force`、`pip install`、`taskkill`、`curl ... \| bash`、输出重定向 | 挂起等确认 |
+
+`git` 单独细分——`status` / `log` 是只读放行，`push` / `reset --hard` / `clean -fd`
+会覆盖远端或丢本地改动，必须问。
+
+执行侧还有三道约束：工作目录必须在白名单内、默认 30 秒超时（上限 300）、
+输出按字符截断而不是整屏灌进上下文。
 
 ## 任务生命周期
 
