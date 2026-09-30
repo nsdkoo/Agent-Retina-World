@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
+import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime
@@ -58,6 +60,10 @@ class AgentController:
         step_timeout: float = 0.0,
         tracer: SpanRecorder | None = None,
         trace_content: bool = True,
+        max_retries_per_step: int = 2,
+        max_total_retries: int = 5,
+        breaker_threshold: int = 3,
+        max_replans: int = 1,
     ) -> None:
         self.registry = registry
         self.planner = planner
@@ -80,6 +86,14 @@ class AgentController:
         self.tracer = tracer or SpanRecorder(content=trace_content)
         self._spans: list[Span] = []
         self._task_span: Span | None = None
+        # 错误恢复的预算。三个上限都是防"救着救着变成风暴"
+        self.max_retries_per_step = max_retries_per_step
+        self.max_total_retries = max_total_retries
+        self.breaker_threshold = breaker_threshold
+        self.max_replans = max_replans
+        self._total_retries = 0
+        self._tool_fails: dict[str, int] = {}
+        self._replans = 0
 
     # ---- 只读视图 ----
 
@@ -141,6 +155,9 @@ class AgentController:
         self._state = state
         self._rehearse(state)
         self._cancel.clear()      # 续跑是新的一次执行，别带着上次的取消令牌
+        self._tool_fails.clear()  # 熔断计数也是按次算的，新的一次重新开始
+        self._total_retries = 0
+        self._replans = 0
         self._start_trace(state.goal, state)   # 续跑也开一条 trace，便于对比两次执行
         self._publish(
             EventType.USER_MESSAGE,
@@ -224,6 +241,9 @@ class AgentController:
         self._state = state
         self._seen.clear()
         self._cancel.clear()
+        self._total_retries = 0
+        self._tool_fails.clear()
+        self._replans = 0
         self._start_trace(goal, state)
         self._publish(EventType.USER_MESSAGE, {"text": goal}, state)
 
@@ -284,7 +304,15 @@ class AgentController:
                 self._persist(state)
                 continue
 
-            signature = f"{step.tool}:{sorted(step.params.items())}"
+            # 熔断：这个工具在本任务里已经挂太多次了，继续撞只是浪费时间
+            if self._breaker_open(step.tool):
+                self._mark(step, StepStatus.SKIPPED,
+                           f"{step.tool} 反复失败，这次先不试了", False)
+                state.cursor += 1
+                self._persist(state)
+                continue
+
+            signature = self._signature(step)
             self._seen[signature] = self._seen.get(signature, 0) + 1
             if self._seen[signature] > self.max_step_repeats:
                 # Pi 式打转检测：同一个动作来回做，基本是计划坏了
@@ -373,10 +401,107 @@ class AgentController:
     def _run_one(self, step) -> None:
         state = self._state
         assert state is not None
-        result = self._invoke(step)
+        result = self._invoke_with_retry(step)
+        if not result.success:
+            self._tool_fails[step.tool] = self._tool_fails.get(step.tool, 0) + 1
+            # 可修正的失败（文件找不到之类）换条路走，别在原来的路上硬撞
+            if self._maybe_replan(step, result):
+                return
         self._settle(step, result)
         state.cursor += 1
         self._persist(state)
+
+    def _invoke_with_retry(self, step) -> ActionResult:
+        """按失败分级决定要不要重试。
+
+        只有「瞬时错误 + 幂等工具 + 预算没用完」**三个条件同时成立**才重试。
+        卡得这么死是有意的：重试的代价是可能产生第二次副作用，
+        宁可少救，不可误救。指数退避加 jitter 是为了避开同时重试的尖峰。
+        """
+        spec = self.registry.get(step.tool)
+        attempt = 0
+        while True:
+            result = self._invoke(step)
+            if result.success or not self._should_retry(step, spec, result, attempt):
+                return result
+            attempt += 1
+            self._total_retries += 1
+            delay = 0.3 * (2 ** (attempt - 1)) + random.uniform(0, 0.15)
+            logger.info("第 %d 次重试：%s（%.2fs 后）", attempt, step.tool, delay)
+            time.sleep(delay)
+
+    def _should_retry(self, step, spec, result: ActionResult, attempt: int) -> bool:  # noqa: ANN001, ARG002
+        """三条缺一不可，每一条都在防同一件事：重试出第二次副作用。"""
+        if result.error_kind != "retryable":
+            # 参数错、权限错、超时未知——重试都解决不了
+            return False
+        if spec is None or not spec.idempotent:
+            # 写操作重跑会再来一次（move 会再移一遍）
+            return False
+        if attempt >= self.max_retries_per_step:
+            return False
+        return self._total_retries < self.max_total_retries
+
+    def _breaker_open(self, tool: str) -> bool:
+        """熔断：同一个工具在本任务里挂太多次，后面的调用直接拒掉。
+
+        现实里这通常意味着「这条路根本走不通」而不是「运气不好」，
+        继续撞只是浪费时间，还会把失败日志刷满。
+        """
+        return self._tool_fails.get(tool, 0) >= self.breaker_threshold
+
+    def _maybe_replan(self, step, result: ActionResult) -> bool:  # noqa: ANN001
+        """可修正的失败 → 重规划一次，换条路走。
+
+        三个限制：只对 `correctable` 生效、只做一次（反复重规划等于换个方式打转）、
+        **失败步的签名会被剔除**（否则规划器多半会给出同一套步骤）。
+
+        返回 True 表示已经换了新计划，调用方不要再 settle 这一步。
+        """
+        state = self._state
+        assert state is not None
+        if result.error_kind != "correctable" or self._replans >= self.max_replans:
+            return False
+
+        remaining = state.steps[state.cursor:]
+        if len(remaining) < 1:
+            return False
+
+        failed_signature = self._signature(step)
+        goal = "；".join(s.goal for s in remaining if s.goal)
+        try:
+            new_plan = self.planner.plan(goal)
+        except Exception:  # noqa: BLE001 - 重规划失败就当没这回事，照常报告失败
+            logger.debug("重规划失败", exc_info=True)
+            return False
+
+        fresh = [
+            s for s in (new_plan or [])
+            if self._signature_from(s.tool, s.params) != failed_signature
+        ]
+        if not fresh:
+            return False
+
+        self._replans += 1
+        # 原地换掉剩下的步骤，游标不动——这一步已经被这次重规划取代了
+        from screen_agent.agent.state import StepRecord
+
+        state.steps[state.cursor:] = [
+            StepRecord(index=state.cursor + i, goal=s.goal, tool=s.tool,
+                       params=dict(s.params), why=s.why)
+            for i, s in enumerate(fresh)
+        ]
+        state.plan = list(fresh)
+        self._publish(EventType.PLAN, {
+            "count": len(fresh),
+            "reason": f"「{step.goal}」没走通，换了个走法",
+            "steps": [{"goal": s.goal, "tool": s.tool, "why": s.why} for s in fresh],
+        }, state)
+        self._persist(state)
+        return True
+
+    def _signature_from(self, tool: str, params: dict) -> str:
+        return f"{tool}:{sorted((params or {}).items())}"
 
     def _invoke(self, step) -> ActionResult:
         self._publish(EventType.ACTION, {

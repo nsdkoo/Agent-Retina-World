@@ -175,17 +175,23 @@ class StepTimeoutTests(unittest.TestCase):
         return ToolSpec("slow.tool", "慢工具", _handler, RiskLevel.SAFE,
                         idempotent=idempotent)
 
-    def test_timeout_marks_failed_without_retry(self) -> None:
+    def test_nonidempotent_timeout_does_not_retry(self) -> None:
+        """非幂等工具超时 → 归 `timeout_unknown` → **不重试**。
+
+        它可能已经把东西改了，重跑就是第二次副作用。
+        （幂等的超时是另一回事：归 `retryable`，会被错误恢复重试——
+        那条路径由 #4 的 test_retry_on_retryable_idempotent 覆盖。）
+        """
         calls: list[str] = []
         steps = [PlanStep(goal="慢活", tool="slow.tool")]
-        controller = self._build(self._sleeper(1.5, True, calls), steps, step_timeout=0.3)
+        controller = self._build(self._sleeper(1.5, False, calls), steps, step_timeout=0.3)
 
         start = time.time()
-        result = controller.run("慢活")
+        controller.run("慢活")
         elapsed = time.time() - start
 
         self.assertLess(elapsed, 1.2, "超时后不该还在等")
-        self.assertEqual(len(calls), 1, "超时不该自动重试")
+        self.assertEqual(len(calls), 1, "非幂等工具超时不该重试")
 
     def test_idempotent_timeout_is_retryable(self) -> None:
         """只读工具超时 → 归 retryable（重跑无害）。"""
