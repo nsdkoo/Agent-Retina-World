@@ -17,12 +17,18 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, time as clock
 
-# 默认拦掉：密码管理器、银行支付、私密通讯
+# 默认拦掉：密码管理器、银行支付、凭据、证照、医疗
+# 扩充依据来自黄金集评测：第一批样本全在旧名单里，所以召回的 100% 是假象；
+# 样本一铺开就露出 8 条漏放（vault / 云闪付 / accesskey / 护照 / 病历…）
 DEFAULT_DENY_TITLES = (
-    "1password", "bitwarden", "keepass", "lastpass", "dashlane", "keeper",
+    "1password", "bitwarden", "keepass", "keepassxc", "lastpass", "dashlane",
+    "keeper", "nordpass", "vault", "保险库",
     "password", "密码", "凭据", "credential",
-    "bank", "银行", "支付宝", "alipay", "微信支付", "paypal", "stripe",
-    "网银", "信用卡", "转账",
+    "bank", "银行", "支付宝", "alipay", "微信支付", "收付款", "paypal", "stripe",
+    "网银", "信用卡", "转账", "云闪付", "银联",
+    "accesskey", "访问密钥", "secret key", "私钥",
+    "护照", "身份证", "驾照", "行驶证",
+    "病历", "门诊", "住院", "诊断报告", "体检报告",
     "私密", "incognito", "无痕",
 )
 
