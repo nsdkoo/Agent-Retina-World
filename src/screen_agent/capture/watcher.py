@@ -23,6 +23,7 @@ import logging
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -168,6 +169,7 @@ class DesktopWatcher:
         classifier=None,  # noqa: ANN001 - ActivityClassifier，注入式；不传就只做采集
         flywheel=None,    # noqa: ANN001 - Flywheel，不传就不攒难例
         flywheel_interval: float = 30.0,
+        flywheel_queue_max: int = 100,
     ) -> None:
         self.privacy = privacy or PrivacyGate()
         self.use_uia = use_uia
@@ -181,6 +183,9 @@ class DesktopWatcher:
         self.flywheel = flywheel
         self.flywheel_interval = flywheel_interval
         self._last_flywheel_at = 0.0
+        # 难例队列：满则丢最旧并计数。原先直接按节流丢弃，漏采完全不可见
+        self._flywheel_queue: deque = deque(maxlen=max(1, int(flywheel_queue_max)))
+        self.flywheel_dropped = 0
         self._last_key: tuple[str, str] | None = None
         self._last_seen: datetime | None = None
 
@@ -255,36 +260,67 @@ class DesktopWatcher:
         return event
 
     def _feed_flywheel(self, event: SightEvent, label, rule_activity: str) -> None:  # noqa: ANN001
-        """自动把可疑样本喂进飞轮——观察在跑，数据集就自己在长。
+        """把可疑样本**入队**，到点再统一排空写盘。
 
         只喂两类，不是全量：**规则与模型打架**的、以及**系统自己也没底**的。
         全量灌进去只会淹没真正该看的样本。
 
-        节流是必需的：飞轮每条都写盘，全速喂会拖慢观察循环。
+        **为什么改成队列**：原先的 30 秒节流是丢弃式的——喂进一条之后，30 秒内
+        出现的其他难例**直接丢掉**，漏采还完全不可见。改成有界队列后：
+        样本先入队（满则丢最旧并计数），到点一次性 drain —— 既不丢样本，
+        也不让写盘拖慢观察循环。
         """
         if self.flywheel is None:
             return
-        now = time.monotonic()
-        if now - self._last_flywheel_at < self.flywheel_interval:
-            return
-        try:
-            # 两路打架比低置信度更有价值：说明系统的两套标准本身就不一致
-            if label.source == "http" and rule_activity != label.activity:
-                self.flywheel.mark_disagreement(
-                    event.digest(), rule_activity, label.activity,
-                    event.window_title, event.app,
-                )
-                self._last_flywheel_at = now
-                return
-            threshold = getattr(self.flywheel, "low_confidence", 0.55)
-            if label.confidence and label.confidence < threshold:
-                self.flywheel.observe(
-                    event.digest(), label.activity, event.window_title, event.app,
-                    confidence=label.confidence,
-                )
-                self._last_flywheel_at = now
-        except Exception:  # noqa: BLE001 - 攒难例失败不能影响采集
-            logger.debug("喂飞轮失败", exc_info=True)
+        item = self._build_candidate(event, label, rule_activity)
+        if item is not None:
+            if len(self._flywheel_queue) >= (self._flywheel_queue.maxlen or 0):
+                self.flywheel_dropped += 1     # 丢弃可观测，不再无声无息
+            self._flywheel_queue.append(item)
+        if time.monotonic() - self._last_flywheel_at >= self.flywheel_interval:
+            self.drain_flywheel()
+
+    def _build_candidate(self, event: SightEvent, label, rule_activity: str):  # noqa: ANN001, ANN202
+        """判断这条观察到不到进飞轮的标准。返回 (kind, kwargs) 或 None。
+
+        这是纯判断，不碰 IO——真正写盘留给 `drain_flywheel`。
+        """
+        # 两路打架比低置信度更有价值：说明系统的两套标准本身就不一致
+        if label.source == "http" and rule_activity != label.activity:
+            return ("dis", {
+                "text": event.digest(), "rule_guess": rule_activity,
+                "model_guess": label.activity,
+                "window_title": event.window_title, "app": event.app,
+            })
+        threshold = getattr(self.flywheel, "low_confidence", 0.55)
+        if label.confidence and label.confidence < threshold:
+            return ("obs", {
+                "text": event.digest(), "guess": label.activity,
+                "window_title": event.window_title, "app": event.app,
+                "confidence": label.confidence,
+            })
+        return None
+
+    def drain_flywheel(self) -> int:
+        """把队列里的候选一次性写盘，返回写入条数。
+
+        单条失败不影响后续——攒难例是副产品，不能因为一条脏数据把整批丢掉。
+        """
+        if self.flywheel is None:
+            return 0
+        written = 0
+        while self._flywheel_queue:
+            kind, args = self._flywheel_queue.popleft()
+            try:
+                if kind == "dis":
+                    self.flywheel.mark_disagreement(**args)
+                else:
+                    self.flywheel.observe(**args)
+                written += 1
+            except Exception:  # noqa: BLE001
+                logger.debug("写飞轮候选失败", exc_info=True)
+        self._last_flywheel_at = time.monotonic()
+        return written
 
     def _fill_ocr(self, event: SightEvent) -> None:
         from screen_agent.capture import ocr
