@@ -188,6 +188,27 @@ class VoiceAssistant:
         self._pending_options: tuple[str, list[str]] | None = None
         self._on_progress: Callable[[str], None] | None = None
 
+        # ---- 桌面观察：常驻看着你在电脑上做什么，落成可检索的行为日志 ----
+        perception_cfg = raw.get("perception", {}) if isinstance(raw.get("perception", {}), dict) else {}
+        from screen_agent.capture.privacy import PrivacyGate
+        from screen_agent.capture.watcher import DesktopWatcher
+        from screen_agent.memory.journal import DesktopJournal
+
+        self.journal = DesktopJournal(
+            root / str(perception_cfg.get("db_path", "data/memory/desktop.db"))
+        )
+        hours = perception_cfg.get("active_hours")
+        self.watcher = DesktopWatcher(
+            privacy=PrivacyGate(
+                deny_apps=tuple(perception_cfg.get("deny_apps") or []),
+                active_hours=(int(hours[0]), int(hours[1])) if hours else None,
+            ),
+            use_uia=bool(perception_cfg.get("use_uia", True)),
+            uia_timeout=float(perception_cfg.get("uia_timeout", 8.0)),
+        )
+        self.perception_enabled = bool(perception_cfg.get("enabled", True))
+        self._watch_stop = threading.Event()
+
         # ---- Agent 运行时：多步任务规划 + 权限审批 + 轨迹持久化 ----
         agent_cfg = raw.get("agent", {}) if isinstance(raw.get("agent", {}), dict) else {}
         from screen_agent.agent import build_agent
@@ -201,6 +222,7 @@ class VoiceAssistant:
             mode=str(agent_cfg.get("permission_mode", "smart")),
             max_steps=int(agent_cfg.get("max_steps", 5)),
             enabled=bool(agent_cfg.get("enabled", True)),
+            journal=self.journal,
         )
         if self.agent is not None:
             # 事件流是唯一观测口：UI 订阅进度，日志订阅全量，谁都不用改主循环
@@ -498,6 +520,7 @@ class VoiceAssistant:
         """进程退出。会话保持 open——跨重启延续（用户说「退出」才真正关闭会话）。"""
         self._running = False
         self._consolidation_stop.set()
+        self._watch_stop.set()
         self.audio_loop.stop()
 
     def run_in_background(self) -> threading.Thread:
@@ -505,7 +528,17 @@ class VoiceAssistant:
         thread.start()
         consolidation = threading.Thread(target=self._consolidation_loop, daemon=True)
         consolidation.start()
+        if self.perception_enabled:
+            # 常驻观察线程：跟语音循环同进程但互不阻塞，只在窗口切换时动一下
+            threading.Thread(target=self._watch_loop, daemon=True).start()
         return thread
+
+    def _watch_loop(self) -> None:
+        """桌面观察循环。出错只记日志——观察挂了不该拖垮助手本体。"""
+        try:
+            self.watcher.run_forever(self.journal.record, self._watch_stop, interval=1.0)
+        except Exception:  # noqa: BLE001
+            logger.debug("桌面观察循环退出", exc_info=True)
 
     def _consolidation_loop(self) -> None:
         """睡眠门控固化（Google/Cornell Sleep 范式 + Sleep-Gated 披露）：

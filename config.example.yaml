@@ -25,6 +25,15 @@ agent:
   permission_mode: smart   # auto 全自动 | approve 每次问 | smart 智能批准 | chat 仅对话
   max_steps: 5             # 单次任务最多拆成几步
 
+# 桌面观察：常驻记录你在电脑上做了什么（走 UIA 结构化读取，不靠截图）
+perception:
+  enabled: true
+  db_path: data/memory/desktop.db
+  use_uia: true            # Windows 无障碍 API 拿屏幕文本；关掉就只记窗口标题
+  uia_timeout: 8
+  active_hours: [9, 23]    # 只在这个时段记录；删掉这两项表示全天
+  deny_apps: []            # 额外排除的应用进程名，如 ["1password.exe"]
+
 vlm:
   provider: heuristic              # heuristic | openai_compatible
   base_url: http://127.0.0.1:8000/v1

@@ -44,6 +44,7 @@ def build_agent(
     mode: str = "smart",
     max_steps: int = 5,
     enabled: bool = True,
+    journal=None,  # noqa: ANN001 - DesktopJournal，注册桌面行为查询工具用
 ) -> AgentController | None:
     """装配一个可用的 AgentController；enabled=False 时返回 None，让调用方走老路径。"""
     if not enabled:
@@ -53,7 +54,7 @@ def build_agent(
 
     root = Path(project_root)
     # 审批统一由 PolicyEngine 负责，registry 这边不再挂 confirm_fn——两道确认会互相打架
-    registry = build_default_registry()
+    registry = build_default_registry(journal=journal)
     policy = PolicyEngine(
         mode=mode,
         store_path=root / "data" / "agent" / "policy.json",

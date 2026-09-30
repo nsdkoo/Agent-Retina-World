@@ -90,6 +90,24 @@ def parse_intent(command: str, app_aliases: dict[str, str], url_aliases: dict[st
             tool="clip.set", params={"text": clip_set.group(1).strip()},
         )
 
+    # ---- 桌面行为记忆：问「我做过什么」，不用用户主动录入 ----
+    if re.search(
+        r"(?:今天|今日)(?:我)?(?:都)?(?:干|做)了?(?:什么|啥)|(?:今天|今日)(?:的)?(?:活动|记录)|今天忙(?:什么|啥)",
+        text,
+    ):
+        return Intent(IntentType.FILE_OP, raw_command=text, tool="journal.today")
+
+    history_m = re.search(
+        r"(?:找一下|搜一下|查一下|帮我找)\s*(?:我)?(?:之前|刚才|昨天|今天|上午|下午)?\s*"
+        r"(?:看|浏览|打开|访问)过?的?\s*(.+)",
+        text,
+    )
+    if history_m:
+        return Intent(
+            IntentType.FILE_OP, target=history_m.group(1).strip(), raw_command=text,
+            tool="journal.search", params={"query": history_m.group(1).strip()},
+        )
+
     find_m = re.search(r"(?:找一下|找|搜索|查找)(?:文件|文档)\s*(.+)", text)
     if find_m:
         return Intent(

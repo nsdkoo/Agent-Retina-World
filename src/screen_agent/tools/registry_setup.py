@@ -15,6 +15,7 @@ def build_default_registry(
     app_resolver: AppResolver | None = None,
     confirm_fn: Callable[[ToolSpec, dict], bool] | None = None,
     extra_roots: list[str] | None = None,
+    journal=None,  # noqa: ANN001 - MemoryStore 的 DesktopJournal，注入式避免工具层依赖记忆层
 ) -> ToolRegistry:
     resolver = app_resolver or AppResolver(
         Path(__file__).resolve().parents[3] / "data" / "cache" / "app_index.json"
@@ -89,6 +90,40 @@ def build_default_registry(
                       shell.run_command, RiskLevel.HIGH,
                       {"cmd": "要执行的命令", "workdir": "工作目录（默认桌面）",
                        "timeout": "超时秒数，默认 30", "max_output": "输出字符上限"}))
+
+    # ---- 桌面行为记忆（注入式：没接记忆库时这两个工具不注册）----
+    if journal is not None:
+        def _journal_today() -> ActionResult:
+            summary = journal.day_summary()
+            if not summary["total"]:
+                return ActionResult(success=True, message="今天还没记录到什么活动")
+            lines = [f"今天（{summary['date']}）记了 {summary['total']} 条，{summary['first']}—{summary['last']}"]
+            for app, seconds in summary["dwell"][:6]:
+                lines.append(f"  · {app}：约 {seconds // 60} 分钟")
+            others = [f"{a}({c}次)" for a, c in summary["apps"][:8]]
+            lines.append("应用出现次数：" + "、".join(others))
+            return ActionResult(success=True, message="\n".join(lines), detail=summary)
+
+        def _journal_search(query: str, app: str = "") -> ActionResult:
+            rows = journal.search(query, app=app, limit=10)
+            if not rows:
+                return ActionResult(success=False, message=f"活动记录里没搜到「{query}」")
+            lines = []
+            for row in rows:
+                when = row["ts"][5:16].replace("T", " ")
+                body = (row["digest"] or row["window_title"] or "")[:60]
+                lines.append(f"- {when} {row['app']}：{body}")
+            return ActionResult(
+                success=True,
+                message=f"找到 {len(rows)} 条与「{query}」相关的记录：\n" + "\n".join(lines),
+                detail={"rows": rows},
+            )
+
+        register(ToolSpec("journal.today", "今天在电脑上做了什么（应用与停留时长）",
+                          _journal_today, RiskLevel.SAFE))
+        register(ToolSpec("journal.search", "在桌面活动记录里按内容搜索",
+                          _journal_search, RiskLevel.SAFE,
+                          {"query": "要搜的内容", "app": "限定应用（可留空）"}))
 
     # ---- 交互：把需要用户拍板的事变成可点选项 ----
     register(ToolSpec("ask.options", "需要用户拍板时提问并给出候选，别自己替用户猜",

@@ -3,6 +3,36 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。  
 详细过程见 [development-journal.md](development-journal.md)。
 
+## [1.2.0] - 2026-09-30
+
+### 新增
+
+- **桌面常驻观察**（`capture/watcher.py`）：事件驱动采集——只在「前台窗口切换」时记一笔，
+  不空转、不定时截图。定时截图在你看同一个页面五分钟时会白拍十张，且全是重复帧
+- **UIA 结构化读取**（`capture/uia.py`）：走 Windows 无障碍 API（读屏软件用的那套）拿屏幕上
+  的真实文本，对标 Screenpipe 的 accessibility-first 路线。比「截图 → VLM 识图」便宜一到两个
+  数量级，文本精确、不吃显卡。实测一次约 1.4 秒读到 200 条界面文本
+- **隐私闸门**（`capture/privacy.py`）：三层防线——窗口/应用黑名单（密码管理器 / 银行 / 支付）、
+  敏感内容识别（API key / 卡号 / 身份证 / 私钥）、记录时段。被拦下的事件**完全不落盘**，
+  连「几点用过什么应用」的骨架都不留
+- **行为日志与检索**（`memory/journal.py`）：SQLite + FTS5 全文索引。中文先做 bigram 切分——
+  FTS5 默认按单字切，搜「会议」会命中所有含「会」或「议」的文本，bigram 之后才精准
+- 新工具 `journal.today`（今天干了什么 + 各应用停留时长）、`journal.search`（按内容回忆）
+- 新意图：「我今天干了什么」「找一下我之前看的 xxx」
+- `assistant` 常驻观察线程：与语音循环同进程、互不阻塞，窗口切换才动一下
+- 记录自动过期：`purge_before(days)`，常驻记录不能只涨不落
+
+### 变更
+
+- 工具总数 36 → 38
+- `config.yaml` / `config.example.yaml` 新增 `perception` 段
+  （enabled / db_path / use_uia / uia_timeout / active_hours / deny_apps）
+
+### 测试
+
+- 新增 `scripts/live_test_perception.py`：23 项实战验证（UIA 采集 / 中文检索精度 /
+  隐私闸门 / 日报统计 / 过期清理），全绿
+
 ## [1.1.0] - 2026-09-30
 
 ### 新增
