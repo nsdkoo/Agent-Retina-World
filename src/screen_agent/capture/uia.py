@@ -27,16 +27,21 @@ $OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
-$fg = [System.Windows.Automation.AutomationElement]::FocusedElement
-if ($null -eq $fg) { exit 0 }
-
-# 由焦点元素向上找到顶层窗口
-$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-$top = $fg
-for ($i = 0; $i -lt 24; $i++) {
-    $parent = $walker.GetParent($top)
-    if ($null -eq $parent) { break }
-    $top = $parent
+$hwndValue = __HWND__
+if ($hwndValue -ne 0) {
+    # 直接用前台窗口句柄取根元素。别从 FocusedElement 往上找——焦点落在任务栏或
+    # 开始菜单时，往上找会一路爬到任务栏去，结果抓回来一排「开始 / 搜索 / 任务视图」
+    $top = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new($hwndValue))
+} else {
+    $fg = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($null -eq $fg) { exit 0 }
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $top = $fg
+    for ($i = 0; $i -lt 24; $i++) {
+        $parent = $walker.GetParent($top)
+        if ($null -eq $parent) { break }
+        $top = $parent
+    }
 }
 if ($null -eq $top) { exit 0 }
 
@@ -86,17 +91,32 @@ def available() -> bool:
     return sys.platform == "win32"
 
 
+def foreground_hwnd() -> int:
+    """当前前台窗口句柄；拿不到返回 0。"""
+    if not available():
+        return 0
+    import ctypes
+
+    try:
+        return int(ctypes.windll.user32.GetForegroundWindow())
+    except OSError:
+        return 0
+
+
 def read_foreground_text(
     timeout: float = 8.0,
     max_texts: int = 200,
     min_length: int = 2,
+    hwnd: int = 0,
 ) -> WindowContent | None:
-    """读当前前台窗口的结构化文本。非 Windows 或不支持时返回 None。"""
+    """读当前前台窗口的结构化文本。hwnd=0 时自己去取前台句柄。"""
     if not available():
         return None
+    target = int(hwnd) or foreground_hwnd()
+    script = _UIA_SCRIPT.replace("__HWND__", str(target))
     try:
         proc = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _UIA_SCRIPT],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             timeout=timeout,
         )

@@ -37,6 +37,45 @@ capture/uia.py       read_foreground_text   PowerShell + .NET UIAutomationClient
 UIA 走 PowerShell 而不是 ctypes 重写 COM 接口：Windows 上零依赖，代码短到能一眼看完，
 一次几百毫秒的开销摊在「窗口切换」这个动作上完全划算。
 
+## 前台不够用：为什么要记「整桌窗口」
+
+只记前台会丢掉最关键的信息。真实工作时桌面上同时开着浏览器、编辑器、文档、聊天窗口，
+而「他在忙什么」往往写在这些窗口标题里——`淘保函 - Google Chrome`、
+`客诉方案.pptx`、`25年5月业绩分配.pdf`。
+
+所以每条观察除了前台窗口，还会附上**同屏所有可见窗口的标题**，一起进全文索引。
+效果是：即使你当前焦点在知乎，搜「淘保函」也能找回那一刻。
+
+```
+前台：知乎（Edge）+ 200 条页面文本
+同屏：WorkBuddy、淘保函 - Google Chrome、QQ、微信、PowerShell
+```
+
+## UIA 的边界：谁读得到、谁读不到
+
+实测下来分两类：
+
+| 类型 | 例子 | UIA 能读到内容吗 |
+| --- | --- | --- |
+| 原生 Win32 | 记事本、资源管理器 | ✅ 完整 |
+| 浏览器 | Edge / Chrome | ✅ 完整（地址栏 + 页面正文 + 扩展名） |
+| Chromium / Electron | WorkBuddy、VS Code、QQ NT、新版微信 | ❌ 只有一个空壳（`Chrome Legacy Window`） |
+| 游戏 / 远程桌面 | — | ❌ 自绘界面，读不到 |
+
+Electron 系默认**不暴露 accessibility tree**，得应用自己开启（Chromium 的
+`--force-renderer-accessibility`）。所以对这类应用，**窗口标题是唯一可靠的信号**——
+这也是为什么「整桌窗口快照」不是锦上添花，而是必需的兜底。
+
+真正的内容兜底是 OCR（Screenpipe 同样走这一步），列为后续项。
+
+## 一个具体的坑：根元素取错会抓到任务栏
+
+第一版从 `FocusedElement` 向上找顶层窗口。焦点落在任务栏或开始菜单时，这条路径会
+**一路爬到任务栏**，于是「WorkBuddy 窗口」抓回来的是一排「开始 / 搜索 / 任务视图」。
+
+改成直接用前台窗口句柄 `AutomationElement.FromHandle(hwnd)` 取根元素，问题消失。
+教训：**UIA 的树是整屏的，找错根就等于在看另一个窗口**。
+
 ## 隐私：常驻记录的第一性问题
 
 全天候看着屏幕的东西，一旦漏了密码框就不是功能问题而是事故。三层防线：

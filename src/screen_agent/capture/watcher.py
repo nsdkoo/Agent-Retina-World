@@ -54,6 +54,28 @@ def classify_app(process_name: str) -> str:
     return stem
 
 
+# 系统窗口：记了没用，还占地方
+_SYSTEM_WINDOW_HINTS = (
+    "program manager", "windows 输入体验", "microsoft text input",
+    "设置", "settings", "default ime", "windows shell experience",
+)
+
+
+def interesting_windows(titles: list[str]) -> list[str]:
+    """滤掉系统窗口，去重、保序。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for title in titles:
+        clean = (title or "").strip()
+        if not clean or clean in seen:
+            continue
+        if any(hint in clean.lower() for hint in _SYSTEM_WINDOW_HINTS):
+            continue
+        seen.add(clean)
+        out.append(clean)
+    return out
+
+
 @dataclass
 class SightEvent:
     """一次「看到了什么」的快照。"""
@@ -62,6 +84,7 @@ class SightEvent:
     window_title: str
     process_name: str
     texts: list[str] = field(default_factory=list)
+    windows: list[str] = field(default_factory=list)   # 同屏还开着哪些窗口
     source: str = "title"       # title / uia / screenshot
     skip_reason: str = ""       # 非空表示内容被隐私闸门挡下，只留骨架
 
@@ -74,14 +97,23 @@ class SightEvent:
         return not self.skip_reason
 
     def digest(self, limit: int = 15) -> str:
-        """压成一行，给时间线与全文检索用。"""
+        """压成一行，给时间线与全文检索用。含同屏窗口名——
+        「他同时在忙什么」往往就写在这些标题里。"""
         body = " ".join(t for t in self.texts[:limit] if t.strip())
-        return body[:500]
+        context = " ".join(self.other_windows())
+        return f"{body[:400]} {context[:200]}".strip()
+
+    def other_windows(self, limit: int = 8) -> list[str]:
+        """除前台之外还开着的窗口。"""
+        return [w for w in self.windows if w and w != self.window_title][:limit]
 
     def summary(self) -> str:
         head = f"{self.app}｜{self.window_title or '(无标题)'}"
+        others = self.other_windows(3)
+        if others:
+            head += f"（同屏还有：{'、'.join(others)}）"
         if self.skip_reason:
-            return f"{head}（{self.skip_reason}，内容未记录）"
+            return f"{head} — {self.skip_reason}，内容未记录"
         return head
 
 
@@ -95,12 +127,14 @@ class DesktopWatcher:
         uia_timeout: float = 8.0,
         uia_max_texts: int = 200,
         min_title_length: int = 1,
+        snapshot_windows: bool = True,
     ) -> None:
         self.privacy = privacy or PrivacyGate()
         self.use_uia = use_uia
         self.uia_timeout = uia_timeout
         self.uia_max_texts = uia_max_texts
         self.min_title_length = min_title_length
+        self.snapshot_windows = snapshot_windows
         self._last_key: tuple[str, str] | None = None
         self._last_seen: datetime | None = None
 
@@ -108,6 +142,9 @@ class DesktopWatcher:
 
     def poll(self) -> SightEvent | None:
         """看一眼前台。没变化返回 None；变了返回一条事件（可能被隐私闸门标记）。"""
+        from screen_agent.capture import uia
+
+        hwnd = uia.foreground_hwnd()
         ctx = get_foreground_context()
         if ctx is None:
             return None
@@ -135,8 +172,13 @@ class DesktopWatcher:
             event.window_title = ""
             return event
 
+        # 同屏窗口快照：这一层比 UIA 稳得多——Electron / Chromium 系应用内部读不到，
+        # 但窗口标题一直在，而「他同时在忙什么」往往就写在这些标题里
+        if self.snapshot_windows:
+            event.windows = self._snapshot_windows()
+
         if self.use_uia:
-            self._fill_texts(event)
+            self._fill_texts(event, hwnd)
 
         if event.texts and self.privacy.looks_sensitive(" ".join(event.texts[:50])):
             event.texts = []
@@ -144,12 +186,26 @@ class DesktopWatcher:
 
         return event
 
-    def _fill_texts(self, event: SightEvent) -> None:
+    @staticmethod
+    def _snapshot_windows() -> list[str]:
+        """当前所有可见窗口标题。非 Windows 或枚举失败时返回空表。"""
+        try:
+            from screen_agent.tools import _win
+        except Exception:  # noqa: BLE001 - 非 Windows 平台
+            return []
+        try:
+            titles = [w.get("title", "") for w in _win.list_windows()]
+        except Exception:  # noqa: BLE001
+            logger.debug("窗口枚举失败", exc_info=True)
+            return []
+        return interesting_windows(titles)
+
+    def _fill_texts(self, event: SightEvent, hwnd: int = 0) -> None:
         from screen_agent.capture import uia
 
         try:
             content = uia.read_foreground_text(
-                timeout=self.uia_timeout, max_texts=self.uia_max_texts
+                timeout=self.uia_timeout, max_texts=self.uia_max_texts, hwnd=hwnd
             )
         except Exception:  # noqa: BLE001 - 读不到就只留标题，不能让观察循环挂掉
             logger.debug("UIA 读取异常", exc_info=True)

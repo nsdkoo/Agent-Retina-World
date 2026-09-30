@@ -28,6 +28,14 @@
 - `config.yaml` / `config.example.yaml` 新增 `perception` 段
   （enabled / db_path / use_uia / uia_timeout / active_hours / deny_apps）
 
+### 修复
+
+- **UIA 根元素取错**：原实现从 `FocusedElement` 向上找顶层窗口，焦点落在任务栏或开始菜单时
+  会一路爬到任务栏，抓回来一排「开始 / 搜索 / 任务视图」。改为用前台窗口句柄
+  `AutomationElement.FromHandle` 直接取根元素
+- **只记前台会漏关键信息**：现在每条观察附上**同屏所有可见窗口标题**并进全文索引——
+  焦点在知乎时，搜「淘保函」「WorkBuddy」也能找回那一刻
+
 ### 测试
 
 - 新增 `scripts/live_test_perception.py`：23 项实战验证（UIA 采集 / 中文检索精度 /

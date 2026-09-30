@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS sights (
     process_name TEXT DEFAULT '',
     source       TEXT DEFAULT 'title',
     skip_reason  TEXT DEFAULT '',
-    digest       TEXT DEFAULT ''
+    digest       TEXT DEFAULT '',
+    windows      TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sights_ts ON sights(ts);
 CREATE INDEX IF NOT EXISTS idx_sights_app ON sights(app);
@@ -114,14 +115,17 @@ class DesktopJournal:
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO sights (ts, app, window_title, process_name, source,"
-                " skip_reason, digest) VALUES (?,?,?,?,?,?,?)",
+                " skip_reason, digest, windows) VALUES (?,?,?,?,?,?,?,?)",
                 (
                     event.ts.isoformat(), event.app, event.window_title,
                     event.process_name, event.source, event.skip_reason, digest,
+                    "\t".join(event.windows),
                 ),
             )
             sight_id = int(cursor.lastrowid or 0)
-            tokens = bigram_tokens(f"{event.app} {event.window_title} {digest}")
+            tokens = bigram_tokens(
+                f"{event.app} {event.window_title} {' '.join(event.windows)} {digest}"
+            )
             if tokens:
                 conn.execute(
                     "INSERT INTO sights_fts (tokens, sight_id) VALUES (?, ?)",
