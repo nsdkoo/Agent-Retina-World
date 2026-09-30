@@ -1,6 +1,5 @@
 # Agent-Retina-World 开发过程记录
 
-> **用途**：项目演进全过程存档，便于写简历、面试复盘、对照 Git 历史。  
 > **维护**：每完成一个 Plan 或版本里程碑，更新本文 + `docs/plans/` 归档。  
 > **仓库**：https://github.com/nsdkoo/Agent-Retina-World  
 > **本地路径**：`D:\Agent-Retina`
