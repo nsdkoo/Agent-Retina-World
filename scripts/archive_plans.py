@@ -66,11 +66,34 @@ def find_repo_root(start: Path) -> Path | None:
     return None
 
 
+def auto_code_markers(repo_root: Path) -> list[str]:
+    """自动提取项目特有的**代码路径**作为识别信号。
+
+    为什么需要它：AI 写计划时**更愿意写相对代码路径**（`src/screen_agent/tools/`），
+    而不是项目绝对路径。实测有三份本项目的 plan 因为正文里没写 `D:\\素材存储\\...`
+    而漏掉，但通篇都在提 `src/screen_agent/`。
+
+    包名是项目特有的，所以这条路比「找绝对路径」可靠得多。
+    **自动扫 `src/` 下的包名**，不需要用户手配词表——配了也会过期。
+    """
+    markers: set[str] = set()
+    for parent in ("src", "lib", "app", "packages"):
+        base = repo_root / parent
+        if not base.is_dir():
+            continue
+        for child in base.iterdir():
+            if not child.is_dir() or child.name.startswith((".", "_")):
+                continue
+            # 带父目录的写法最可靠（"src/screen_agent" 很难巧合）
+            markers.add(f"{parent}/{child.name}")
+    return sorted(markers)
+
+
 def project_markers(repo_root: Path) -> list[str]:
     """本项目的识别标记。
 
     目录名是最稳的（plan 正文里写项目路径时必然包含它）；
-    再加完整路径的两种斜杠写法，以及历史名。
+    再加完整路径的两种斜杠写法、历史名，以及自动提取的代码路径。
     """
     name = repo_root.name
     markers = {
@@ -81,6 +104,7 @@ def project_markers(repo_root: Path) -> list[str]:
         str(repo_root).replace("/", "\\"),
     }
     markers.update(_HISTORICAL_MARKERS)
+    markers.update(auto_code_markers(repo_root))
     return sorted(m for m in markers if m and len(m) > 3)
 
 
@@ -145,7 +169,9 @@ def collect(repo_root: Path, dest_dir: Path) -> tuple[list[tuple[Path, Path, str
         if not source_dir.is_dir():
             continue
         stats["source_dirs"] += 1
-        for path in sorted(source_dir.glob("*.md")):
+        # rglob 递归：有的工具会把旧 plan 挪进子目录
+        # （Cursor 的 `_archived/` 里就还有 252 份，只扫顶层会整批漏掉）
+        for path in sorted(source_dir.rglob("*.md")):
             stats["scanned"] += 1
             if not belongs_to_project(path, markers):
                 continue

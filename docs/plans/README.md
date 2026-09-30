@@ -22,10 +22,39 @@ python scripts/archive_plans.py                 # 归档（幂等，重复跑不
 python scripts/archive_plans.py --install-hook  # 装 git 钩子，提交即自动归档
 ```
 
-**怎么判归属**：读文件内容，看有没有出现本项目标识（目录名 / 仓库路径 / 历史名）。
-实测可行 —— WorkBuddy 生成的 plan 会在正文里写到项目路径。
+**怎么判归属**：读文件内容，看有没有出现本项目标识。信号分三层：
+
+| 信号 | 例子 | 可靠度 |
+| --- | --- | --- |
+| 项目绝对路径 | `D:\素材存储\Agent-Retina-World` | 强，但**多数 plan 不写** |
+| **代码路径**（自动提取） | `src/screen_agent` | **最强** —— AI 写计划时更愿意写相对路径 |
+| 项目名 / 历史名 | `Agent-Rita`、`Agent-Retina-World` | 中 |
+
+**代码路径是自动扫 `src/` 下的包名得来的**，不需要手配词表（配了也会过期）。
+
+> 这条是踩坑换来的：最初只按绝对路径匹配，结果漏掉 3 份本项目的 plan
+> （`swift-vortex-einstein-dGKK0fha` 等）—— 它们通篇写的是 `src/screen_agent/`，
+> 一次都没提项目绝对路径。同时扫描还得**递归**：
+> Cursor 把旧 plan 挪进了 `_archived/`（252 份），只扫顶层会整批漏掉。
 
 **已归档的记在 `.archive-registry.json`**（按内容 hash），所以重复跑是安全的。
+
+### 覆盖范围与局限
+
+| 工具 | 是否产出 md | plan 目录 |
+| --- | --- | --- |
+| Cursor | ✅ | `~/.cursor/plans/`（含 `_archived/`） |
+| WorkBuddy | ✅ | `~/.workbuddy/plans/` |
+| Codex | ✅ | `~/.codex/plans/` |
+| CodeBuddy | ✅ | `~/.codebuddy/plans/` |
+| Claude | ✅ | `~/.claude/plans/` |
+| **其他工具** | **不一定** | 见下 |
+
+**有些 AI 的 Plan 模式不落盘成文件**（计划只活在会话里）。对这种情况，脚本无能为力 ——
+**只能靠开发日志兜底**（见下节）。这也是为什么那两条机制必须并存：
+一个管「有文件的」，一个管「没文件的」。
+
+要加新工具的话，改 `scripts/archive_plans.py` 顶部的 `_TOOL_PLAN_DIRS` 就行。
 
 ### 2 · 开发日志
 
@@ -46,6 +75,9 @@ Plan 归档再全也补不上。
 | [2026-09-开发日志.md](2026-09-开发日志.md) | **开发日志** | 09 月（含补记） | 2026-09 |
 | [quantum-pulse-babbage-1KjXp3Ie.plan.md](quantum-pulse-babbage-1KjXp3Ie.plan.md) | **自动归档** | 评测 / 飞轮 / 自进化 | 2026-09-30 |
 | [swift-nebula-einstein-JDhgWrK1.plan.md](swift-nebula-einstein-JDhgWrK1.plan.md) | **自动归档** | Agent harness 完善 | 2026-09-30 |
+| [stellar-beacon-tesla-61Y-ZfEF.plan.md](stellar-beacon-tesla-61Y-ZfEF.plan.md) | **自动归档** | 悬浮球扁平化 + 卡死修复 | 2026-09-29 |
+| [swift-vortex-einstein-dGKK0fha.plan.md](swift-vortex-einstein-dGKK0fha.plan.md) | **自动归档** | 桌面操控工具层重写 | 2026-09-29 |
+| [blazing-aurora-tesla-0Eoq0zg-.plan.md](blazing-aurora-tesla-0Eoq0zg-.plan.md) | **自动归档** | 悬浮球视觉重做 | 2026-09-28 |
 | [最小语音对话-demo.plan.md](最小语音对话-demo.plan.md) | 正式 Plan | v0.6 | 2026-06-25 |
 | [文档归档-过程记录.plan.md](文档归档-过程记录.plan.md) | 过程重建 | docs | 2026-06-25 |
 | [v0.5-离线STT与悬浮球.plan.md](v0.5-离线STT与悬浮球.plan.md) | 过程重建 | v0.5 | 2026-06-23 |
