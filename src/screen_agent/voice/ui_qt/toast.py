@@ -63,6 +63,9 @@ class BubbleToast(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self._theme = theme
         self._on_click = on_click
+        # 当前这条消息自己的点击行为（show_message 传 on_click 时设置）。
+        # None 表示回落到构造时的默认行为
+        self._active_click: Callable[[], None] | None = None
         self._text = ""
         self._kind = "Bot"          # Bot | User | Info
         self._tail_on_left = True   # 尖角朝左（气泡在点左边时）
@@ -92,13 +95,23 @@ class BubbleToast(QWidget):
         kind: str = "Bot",
         timeout_ms: int | None = None,
         anchor: QPointF | None = None,
+        on_click: Callable[[], None] | None = None,
     ) -> None:
-        """显示一条消息；timeout_ms 为 None 表示常驻（如聆听中的实时转写）。"""
+        """显示一条消息；timeout_ms 为 None 表示常驻（如聆听中的实时转写）。
+
+        `on_click` 是这条消息**自己的**点击行为，会临时盖过构造时那个默认的。
+        不传就回到默认（打开面板）。
+
+        为什么要按条指定：气泡的点击语义本来只有一种（开面板），
+        但**主动建议**需要「点一下就去执行」——那和「点一下看详情」是两回事，
+        混用一个回调会让用户点哪儿都做同一件事。
+        """
         text = (text or "").strip()
         if not text:
             return
         self._text = text
         self._kind = kind
+        self._active_click = on_click      # None = 用构造时的默认
         if anchor is not None:
             self._anchor = anchor
         self._hide_timer.stop()
@@ -243,5 +256,8 @@ class BubbleToast(QWidget):
     # ---- 交互：点气泡展开完整面板 ----
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton and self._on_click:
-            self._on_click()
+        if event.button() == Qt.MouseButton.LeftButton:
+            # 这条消息自带的行为优先；没有才用默认的（开面板）
+            handler = self._active_click or self._on_click
+            if handler:
+                handler()

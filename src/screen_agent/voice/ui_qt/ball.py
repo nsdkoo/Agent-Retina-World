@@ -409,16 +409,33 @@ class QtFloatingBall:
                 self._toggle_panel(self._panel, self._ball)
 
         def on_suggestion(items: list) -> None:
-            """主动建议：用气泡说一句。
+            """主动建议：用气泡说一句，**点一下就能执行**。
 
             **刻意不语音播报** —— 主动说的话如果还念出来会很吵，
             用户正专注时尤其烦。文字扫一眼就够，想看再看。
             """
             if not items:
                 return
+            top = items[0]
             signals.suggestion.emit([s.to_dict() for s in items])
-            toast.show_message(items[0].render(), "Rita", timeout_ms=8000,
-                               anchor=ball_anchor())
+
+            def _run() -> None:
+                """气泡被点击 —— 这是「建议」和「提示」的分水岭。
+
+                提示只能看，建议点一下就能动手。执行走的是常规通道
+                （照样过权限审批），不是特权路径。
+                """
+                result = self.assistant.run_suggestion(top)
+                toast.hide_now()
+                if result is not None and getattr(result, "message", ""):
+                    toast.show_message(result.message, "Bot", timeout_ms=6000,
+                                       anchor=ball_anchor())
+
+            clickable = getattr(top, "action", None)
+            hint = "　（点一下执行）" if clickable else ""
+            toast.show_message(top.render() + hint, "Rita", timeout_ms=8000,
+                               anchor=ball_anchor(),
+                               on_click=_run if clickable else None)
 
         self.assistant.on_transcript(on_transcript)
         self.assistant.on_result(on_result)

@@ -78,6 +78,12 @@ class Suggestion:
     why: str                        # 为什么现在提这个
     confidence: float = 0.5
     steps: list[str] = field(default_factory=list)
+    # 点击后要执行的**动作**。None = 只能看，不能一键执行。
+    #
+    # 用结构化 dict 而不是拼一句自然语言：动作最终要按下标参数调用真实方法
+    # （`resume_from(task_id)` 这类），拼字符串再解析回来是绕远路，还容易解析错。
+    # 结构：{"kind": "resume"|"intention"|"run", ...}
+    action: dict | None = None
 
     def render(self) -> str:
         return f"{self.what}（{self.why}）"
@@ -86,6 +92,7 @@ class Suggestion:
         return {
             "kind": self.kind, "what": self.what, "why": self.why,
             "confidence": self.confidence, "steps": list(self.steps),
+            "action": dict(self.action) if self.action else None,
         }
 
 
@@ -145,6 +152,8 @@ class PreparationService:
             out.append(Suggestion(
                 kind="intention", what=content, why=why,
                 confidence=0.9 if overdue else 0.8,
+                # 用户交代过的事，点一下就当指令交出去——规划器会照常拆解
+                action={"kind": "intention", "content": content},
             ))
         return out
 
@@ -174,6 +183,8 @@ class PreparationService:
                 why=f"{label.get(state, '上次没做完')}，可以直接从中断的地方续上",
                 confidence=0.75,
                 steps=[f"resume_from:{task_id}"] if task_id else [],
+                # 续跑要调 `resume_from(task_id)` 这个真实方法，不是发一句指令
+                action={"kind": "resume", "task_id": task_id} if task_id else None,
             ))
         return out
 
@@ -209,5 +220,7 @@ class PreparationService:
                 what=f"整理一下 {path}",
                 why=f"你在这里动过 {count} 次，像是常打交道的目录",
                 confidence=min(0.5 + count * 0.05, 0.7),
+                # 习惯类建议是「起个话头」，交给规划器正常拆解
+                action={"kind": "run", "goal": f"整理一下 {path}"},
             ))
         return out

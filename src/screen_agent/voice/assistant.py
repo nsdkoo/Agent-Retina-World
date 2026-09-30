@@ -334,6 +334,34 @@ class VoiceAssistant:
         """
         self._suggestion_cb = cb
 
+    def run_suggestion(self, suggestion) -> ActionResult | None:  # noqa: ANN001
+        """执行一条主动建议（气泡被点击时调）。
+
+        **主动建议不是特权通道** —— 它照样过和别人一样的门：
+        续跑走 `controller.resume_from`（内部照常判权限、照常挂起等确认），
+        意图和习惯当普通指令交给 `handle_command`。
+
+        这样「主动」就不会变成「绕过审批」的借口。主动不等于自作主张。
+        """
+        action = getattr(suggestion, "action", None)
+        if not action:
+            return None                     # 只能看不能点的建议（比如纯提示）
+
+        kind = action.get("kind")
+        try:
+            if kind == "resume":
+                task_id = action.get("task_id") or ""
+                if self.agent is None or not task_id:
+                    return None
+                return self.agent.resume_from(task_id)
+            if kind == "intention":
+                return self.handle_command(action.get("content") or "")
+            if kind == "run":
+                return self.handle_command(action.get("goal") or "")
+        except Exception:  # noqa: BLE001 - 点击执行失败不该影响别处
+            logger.debug("执行主动建议失败", exc_info=True)
+        return None
+
     def _on_sight(self, event) -> None:  # noqa: ANN001 - capture.watcher.SightEvent
         """watcher 每条事件的落点：先记日志，再看要不要主动提点什么。
 

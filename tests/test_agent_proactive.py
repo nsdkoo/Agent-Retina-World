@@ -262,5 +262,123 @@ class OutputQualityTests(unittest.TestCase):
         self.assertEqual(service.suggest(), [])
 
 
+class ActionWiringTests(unittest.TestCase):
+    """建议要能「点一下就执行」—— 这是**建议**和**提示**的分水岭。
+
+    提示只能看，建议点一下就能动手。所以每条建议都得带上结构化的 `action`，
+    而不只是一句人话。用结构化 dict 而不是拼自然语言，是因为动作最终要
+    按下标参数调用真实方法（`resume_from(task_id)`），拼字符串再解析回来
+    是绕远路，还容易解析错。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.memory = MemoryStoreV2(Path(self._tmp.name) / "m.db")
+
+    def test_intention_carries_action(self) -> None:
+        self.memory.add_intention("交周报", due_at=datetime(2026, 9, 30, 9, 0))
+        service = PreparationService(memory=self.memory)
+        found = service.suggest(now=datetime(2026, 9, 30, 15, 0))
+        self.assertEqual(found[0].action, {"kind": "intention", "content": "交周报"})
+
+    def test_resume_carries_method_call_action(self) -> None:
+        """续跑要调真实方法，不是发一句指令——所以 action 里带 task_id。"""
+        class _FakeTraj:
+            def recent(self, limit: int = 10):  # noqa: ANN202, ARG002
+                return [{"task_id": "abc-123", "goal": "跑评测", "state": "paused"}]
+
+        service = PreparationService(trajectory=_FakeTraj())
+        found = service.suggest()
+        self.assertEqual(found[0].action, {"kind": "resume", "task_id": "abc-123"})
+
+    def test_habit_carries_run_action(self) -> None:
+        for i in range(4):
+            self.memory.save_agent_episode(
+                goal="干活", summary="干活", task_id=f"t-{i}", resources=[r"D:\下载"],
+            )
+        service = PreparationService(memory=self.memory)
+        found = [s for s in service.suggest() if s.kind == "habit"]
+        self.assertTrue(found)
+        self.assertEqual(found[0].action, {"kind": "run", "goal": r"整理一下 D:\下载"})
+
+    def test_action_survives_to_dict(self) -> None:
+        """序列化到 UI 时要带上 action，否则前端不知道能不能点。"""
+        self.memory.add_intention("交周报", due_at=datetime(2026, 9, 30, 9, 0))
+        service = PreparationService(memory=self.memory)
+        payload = service.suggest(now=datetime(2026, 9, 30, 15, 0))[0].to_dict()
+        self.assertIsNotNone(payload["action"])
+        self.assertEqual(payload["action"]["kind"], "intention")
+
+    def test_no_action_when_task_id_missing(self) -> None:
+        """没 task_id 就执行不了——这时候宁可不给 action（气泡也不显示可点）。"""
+        class _FakeTraj:
+            def recent(self, limit: int = 10):  # noqa: ANN202, ARG002
+                return [{"task_id": "", "goal": "跑评测", "state": "paused"}]
+
+        service = PreparationService(trajectory=_FakeTraj())
+        found = service.suggest()
+        self.assertTrue(found)
+        self.assertIsNone(found[0].action)
+
+
+class RunSuggestionTests(unittest.TestCase):
+    """`run_suggestion` 的分发 —— **主动建议不是特权通道**。"""
+
+    def _bare_assistant(self):  # noqa: ANN202
+        """绕过 __init__ 造一个最小 assistant（只为测分发逻辑）。"""
+        from screen_agent.voice.assistant import VoiceAssistant
+
+        obj = VoiceAssistant.__new__(VoiceAssistant)
+        obj.agent = None
+        obj.commands = []
+        obj.handle_command = lambda text: obj.commands.append(text) or None  # type: ignore[method-assign]
+        return obj
+
+    def test_no_action_returns_none(self) -> None:
+        from screen_agent.proactive.prepare import Suggestion
+
+        assistant = self._bare_assistant()
+        plain = Suggestion(kind="habit", what="整理一下 D:\\下载", why="常动")
+        self.assertIsNone(assistant.run_suggestion(plain))
+
+    def test_resume_dispatches_to_controller(self) -> None:
+        """续跑必须走 controller.resume_from —— 那里照常判权限，不是绕过去。"""
+        from screen_agent.proactive.prepare import Suggestion
+
+        assistant = self._bare_assistant()
+        calls: list[str] = []
+
+        class _FakeAgent:
+            def resume_from(self, task_id: str):  # noqa: ANN202
+                calls.append(task_id)
+                return "resumed"
+
+        assistant.agent = _FakeAgent()
+        s = Suggestion(kind="resume", what="接着做", why="中断了",
+                       action={"kind": "resume", "task_id": "t-9"})
+        self.assertEqual(assistant.run_suggestion(s), "resumed")
+        self.assertEqual(calls, ["t-9"])
+
+    def test_intention_goes_through_normal_command_path(self) -> None:
+        """意图和习惯当普通指令走 handle_command——主动不等于绕过审批。"""
+        from screen_agent.proactive.prepare import Suggestion
+
+        assistant = self._bare_assistant()
+        s = Suggestion(kind="intention", what="交周报", why="你交代过",
+                       action={"kind": "intention", "content": "交周报"})
+        assistant.run_suggestion(s)
+        self.assertEqual(assistant.commands, ["交周报"])
+
+    def test_unknown_action_kind_is_silent(self) -> None:
+        from screen_agent.proactive.prepare import Suggestion
+
+        assistant = self._bare_assistant()
+        s = Suggestion(kind="habit", what="x", why="y",
+                       action={"kind": "未来才支持的类型"})
+        self.assertIsNone(assistant.run_suggestion(s))
+        self.assertEqual(assistant.commands, [], "不认识的动作不该乱提交")
+
+
 if __name__ == "__main__":
     unittest.main()
