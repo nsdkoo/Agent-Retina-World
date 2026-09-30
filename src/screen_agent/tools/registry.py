@@ -85,6 +85,16 @@ class ToolSpec:
     # 同一个调用重复执行是否安全。**默认 False（保守）**：
     # move 重跑会再移一次、mkdir 重跑会报已存在——只有纯读工具才敢标 True
     idempotent: bool = False
+    # 执行后会「造成什么变化」的一句话，用于动手前的后果预演。
+    # 用 {参数名} 占位，例如「把 {src} 移到 {dst}」。
+    # **不填也能工作**（预演会退回按 description + risk + idempotent 推断），
+    # 所以是增量落地——但填了预演会准得多，因为只有工具自己最清楚自己会改什么
+    effects: str = ""
+    # 这个动作做完还能不能收回来。`None` = 没声明，预演按 risk 保守推断
+    # （默认当不可逆，宁可多提示一次）。
+    # **有撤销机制的工具应当显式标 True** —— 否则预演会把它误报成危险动作，
+    # 提示一多用户就疲劳了，真正危险的那些反而被忽略（踩过这个坑）
+    reversible: bool | None = None
 
 
 class ToolRegistry:

@@ -28,6 +28,7 @@ from datetime import datetime
 from screen_agent.agent.events import Event, EventStream, EventType
 from screen_agent.agent.planner import Planner
 from screen_agent.agent.policy import Decision, PolicyEngine, ToolPermission
+from screen_agent.agent.foresight import Foresight, ForesightEngine
 from screen_agent.agent.state import AgentState, StepStatus, TaskState
 from screen_agent.agent.trace import Span, SpanRecorder
 from screen_agent.agent.trajectory import TrajectoryStore
@@ -65,6 +66,7 @@ class AgentController:
         breaker_threshold: int = 3,
         max_replans: int = 1,
         episode_sink=None,  # noqa: ANN001 - 记忆写入回调，鸭子类型
+        foresight: ForesightEngine | None = None,
     ) -> None:
         self.registry = registry
         self.planner = planner
@@ -98,6 +100,10 @@ class AgentController:
         # 任务收尾回流记忆的出口。传 None 就完全不碰记忆——
         # agent 层不直接依赖 memory 模块，两边保持解耦
         self.episode_sink = episode_sink
+        # 后果预演：动手前先在沙盘里算一遍。默认开（规则版零成本），
+        # 传 None 可关闭——评测基线有时需要「不做预演」的对照组
+        self.foresight = foresight if foresight is not None else ForesightEngine()
+        self.last_foresight: Foresight | None = None
 
     # ---- 只读视图 ----
 
@@ -333,7 +339,9 @@ class AgentController:
                 self._persist(state)
                 continue
             if decision is Decision.ASK:
-                return self._suspend(step, reason)
+                # 动手前先在沙盘里算一遍——把后果写进挂起提示。
+                # 只在要用户拍板时才做：没风险的动作不需要预演，做了只是噪声
+                return self._suspend(step, self._enrich_with_foresight(step, spec, reason))
 
             # 连续的只读步骤攒一批并行跑（Pi 默认并行工具执行；写操作仍串行）
             group = self._collect_parallel(state)
@@ -342,6 +350,28 @@ class AgentController:
             else:
                 self._run_one(step)
             continue
+
+    def _enrich_with_foresight(self, step, spec, reason: str) -> str:  # noqa: ANN001
+        """把后果预演拼进挂起提示。
+
+        **为什么只在这里做**：预演的价值在于「拦住不可逆的误操作」。
+        对只读动作做预演纯属浪费——既不拦什么，还稀释了真正该看的提示。
+        """
+        if self.foresight is None:
+            return reason
+        try:
+            look = self.foresight.predict(step, spec)
+        except Exception:  # noqa: BLE001 - 预演是辅助，绝不能成为新的故障点
+            logger.debug("后果预演失败", exc_info=True)
+            return reason
+
+        self.last_foresight = look
+        # 也发到事件流，UI 可以单独渲染（比如危险动作标红）
+        if self._state is not None:
+            self._publish(EventType.OBSERVATION, {"foresight": look.to_dict()},
+                          self._state, step.index + 1)
+        line = look.render()
+        return f"{reason}\n{line}" if reason else line
 
     def _signature(self, step) -> str:
         return f"{step.tool}:{sorted(step.params.items())}"

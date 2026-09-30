@@ -47,7 +47,8 @@ def build_default_registry(
                                          "required": True}}))
     register(ToolSpec("app.close", "关闭应用", _app_close, RiskLevel.HIGH, {"target": "进程名"},
                       schema={"target": {"type": "string", "description": "进程名",
-                                         "required": True}}))
+                                         "required": True}},
+                      effects="关闭 {target}，未保存的内容会丢失"))
     register(ToolSpec("app.list", "列出已装应用", _app_list, RiskLevel.SAFE, idempotent=True))
 
     # ---- 文件（读）----
@@ -74,7 +75,9 @@ def build_default_registry(
                       {"src": "源路径", "dst": "目标目录或完整路径"},
                       schema={"src": {"type": "string", "description": "源路径", "required": True},
                               "dst": {"type": "string", "description": "目标目录或完整路径",
-                                      "required": True}}))
+                                      "required": True}},
+                      effects="{src} 会从原位置移到 {dst}（原位置不再有，可用 files.undo 撤销）",
+                      reversible=True))
     register(ToolSpec("files.copy", "复制文件到目标目录", files.copy_path, RiskLevel.LOW,
                       {"src": "源路径", "dst": "目标目录或完整路径"},
                       schema={"src": {"type": "string", "description": "源路径", "required": True},
@@ -92,7 +95,9 @@ def build_default_registry(
                               "mode": {"type": "string", "description": "type 按类型 / date 按时间"}}))
     register(ToolSpec("files.delete", "删除文件（放进回收站，可还原）", files.delete_path,
                       RiskLevel.HIGH, {"path": "路径"},
-                      schema={"path": {"type": "string", "description": "路径", "required": True}}))
+                      schema={"path": {"type": "string", "description": "路径", "required": True}},
+                      effects="把 {path} 移入回收站（可还原，但不会回到原位置原样）",
+                      reversible=True))
     register(ToolSpec("files.undo", "撤销上一次文件操作", files.undo_last, RiskLevel.LOW))
 
     # ---- 文件内容层：读 / 写 / 改 / 搜 / 匹配（对标 Codex · WorkBuddy 的 read/write/edit/grep/glob）----
@@ -143,7 +148,8 @@ def build_default_registry(
                       schema={"cmd": {"type": "string", "description": "要执行的命令", "required": True},
                               "workdir": {"type": "string", "description": "工作目录，默认桌面"},
                               "timeout": {"type": "number", "description": "超时秒数，默认 30"},
-                              "max_output": {"type": "integer", "description": "输出字符上限"}}))
+                              "max_output": {"type": "integer", "description": "输出字符上限"}},
+                      effects="在 {workdir} 下执行 `{cmd}`——后果完全取决于命令本身，系统不设防"))
 
     # ---- 桌面行为记忆（注入式：没接记忆库时这两个工具不注册）----
     if journal is not None:
