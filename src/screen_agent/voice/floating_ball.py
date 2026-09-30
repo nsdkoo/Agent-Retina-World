@@ -112,7 +112,7 @@ class FloatingBallUI:
 
         tk.Label(
             self._popover,
-            text="Agent-Retina",
+            text="Agent-Rita",
             fg="#e7ecf3",
             bg="#1a2332",
             font=("Segoe UI", 9, "bold"),

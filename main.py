@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent-Retina CLI"""
+"""Agent-Rita CLI"""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def cmd_once(args: argparse.Namespace) -> None:
 def cmd_watch(args: argparse.Namespace) -> None:
     pipeline = PerceptionPipeline.from_config(args.config)
     interval = args.interval
-    print(f"Agent-Retina v{__version__} · 间隔 {interval}s · Ctrl+C 停止")
+    print(f"Agent-Rita v{__version__} · 间隔 {interval}s · Ctrl+C 停止")
     try:
         while True:
             result = pipeline.run_once()
@@ -79,7 +79,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     web_cfg = raw.get("web", {})
     host = args.host or web_cfg.get("host", "127.0.0.1")
     port = args.port or int(web_cfg.get("port", 8765))
-    print(f"Agent-Retina v{__version__} · Web UI http://{host}:{port}")
+    print(f"Agent-Rita v{__version__} · Web UI http://{host}:{port}")
     run_server(args.config, host=host, port=port)
 
 
@@ -96,7 +96,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
     chat_cfg = raw.get("chat", {})
     voice_cfg = raw.get("voice", {})
 
-    print(f"Agent-Retina v{__version__} · 最小 Demo 检查")
+    print(f"Agent-Rita v{__version__} · 最小 Demo 检查")
     print(f"  唤醒词: {', '.join(voice_cfg.get('wake_names', ['小光']))}")
     print(f"  Chat 启用: {chat_cfg.get('enabled', False)}")
     backends = chat_cfg.get("backends")
@@ -155,7 +155,7 @@ def cmd_voice(args: argparse.Namespace) -> None:
     if args.no_ui or ui_mode == "none":
         from screen_agent.voice.audio_loop import list_microphones
 
-        print(f"Agent-Retina v{__version__} · 语音常驻（无界面）")
+        print(f"Agent-Rita v{__version__} · 语音常驻（无界面）")
         print(f"唤醒词：{', '.join(assistant.wake_names)}")
         print(f"输入设备：{list_microphones()}")
         assistant.run_forever()
@@ -174,7 +174,7 @@ def cmd_voice(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=f"Agent-Retina · 屏幕感知 Agent v{__version__}"
+        description=f"Agent-Rita · 屏幕感知 Agent v{__version__}"
     )
     parser.add_argument("--config", type=Path, default=ROOT / "config.yaml")
     sub = parser.add_subparsers(dest="command", required=True)

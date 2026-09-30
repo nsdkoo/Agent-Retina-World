@@ -150,7 +150,7 @@ class TrayIcon(QSystemTrayIcon):
         menu.addAction(act_exit)
 
         self.setContextMenu(menu)
-        self.setToolTip("Agent-Retina 桌面助手 · 喊「瑞塔」或 Alt+Space")
+        self.setToolTip("Agent-Rita 桌面助手 · 喊「瑞塔」或 Alt+Space")
         self.activated.connect(self._on_activated)
 
     def _switch_model(self, name: str, chat_client, on_model_switched) -> None:

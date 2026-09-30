@@ -5,7 +5,7 @@
 ## 1. 安装依赖
 
 ```powershell
-cd D:\Agent-Retina
+cd D:\Agent-Rita
 pip install -r requirements.txt
 ```
 

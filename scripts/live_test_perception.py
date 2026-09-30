@@ -113,7 +113,7 @@ def main() -> int:
          ["与会人员：张三 李四", "结论：排期顺延一周"]),
         (42, "百度一下，你就知道", "msedge.exe",
          ["深圳天气 未来一周", "周末有雨 记得带伞"]),
-        (70, "Agent-Retina-World - 编辑器", "Code.exe",
+        (70, "Agent-Rita-World - 编辑器", "Code.exe",
          ["pipeline.py 感知链路", "dedup 去重策略", "VLM 调用降本"]),
         (95, "微信", "WeChat.exe",
          ["老王：明天上午的评审改到下午三点"]),

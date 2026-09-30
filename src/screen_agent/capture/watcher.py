@@ -182,7 +182,10 @@ class DesktopWatcher:
         self.classifier = classifier
         self.flywheel = flywheel
         self.flywheel_interval = flywheel_interval
-        self._last_flywheel_at = 0.0
+        # 必须是"构造那一刻"，不能写 0.0——`time.monotonic()` 返回的是**系统开机以来的秒数**，
+        # 机器跑够 flywheel_interval 之后，第一条样本就会立刻触发排空，节流形同虚设。
+        # （这个 bug 是测试跑在不同 uptime 的机器上才暴露出来的）
+        self._last_flywheel_at = time.monotonic()
         # 难例队列：满则丢最旧并计数。原先直接按节流丢弃，漏采完全不可见
         self._flywheel_queue: deque = deque(maxlen=max(1, int(flywheel_queue_max)))
         self.flywheel_dropped = 0

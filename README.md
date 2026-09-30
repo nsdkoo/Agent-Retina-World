@@ -1,4 +1,4 @@
-# Agent-Retina
+# Agent-Rita
 
 **桌面屏幕感知 Agent** — 让 AI 理解你在电脑上做了什么，并主动提供服务。
 
@@ -210,7 +210,7 @@ sequenceDiagram
 ## 快速开始
 
 ```powershell
-cd D:\Agent-Retina
+cd D:\Agent-Rita
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
