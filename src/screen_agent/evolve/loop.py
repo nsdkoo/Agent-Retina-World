@@ -384,6 +384,68 @@ class Evolver:
         self.archive.add(variant)
         return variant
 
+    def dev_failures(self, rules: dict | None = None) -> list[tuple[str, str, str]]:
+        """用给定规则在**开发集**上跑一遍，返回错判 (case_id, expect, got)。
+
+        多轮迭代要靠它重算失败——每轮采纳改进之后错误集合就变了，
+        拿第一轮那份列表一直跑下去是没有意义的。
+
+        注意只看开发集：留出集是验证用的，拿它找失败等于提前把答案看了。
+        """
+        from screen_agent.understand import classify
+
+        active = rules if rules is not None else self.rules
+        rules_tuple = tuple(
+            (name, tuple(active.get(name, ()))) for name in classify.ACTIVITY_LABELS
+        )
+        failures: list[tuple[str, str, str]] = []
+        for case in self.golden.dev():
+            if not hasattr(case, "expect"):
+                continue
+            label = classify.classify_with_rules(
+                f"{getattr(case, 'app', '')} "
+                f"{getattr(case, 'window_title', '')} {case.text}",
+                rules_tuple,
+            )
+            if label.activity != case.expect:
+                failures.append((case.case_id, case.expect, label.activity))
+        return failures
+
+    def run(
+        self,
+        max_rounds: int = 5,
+        patience: int = 2,
+        strategy: str = "epsilon",
+        epsilon: float = 0.3,
+        failures: list[tuple[str, str, str]] | None = None,
+        rng: random.Random | None = None,
+        on_round=None,  # noqa: ANN001 - Callable[[int, list[Variant]], None]，给 CLI 打印用
+    ) -> list[Variant]:
+        """多轮进化：选父 → 变异 → 验证 → 迁移，跑到挖不动为止。
+
+        跨轮只带两个状态：`self.rules`（当前最优配置）与 `self.archive`（整棵树）。
+
+        终止条件：连续 `patience` 轮没有候选被采纳（这一带挖空了），或跑满 `max_rounds`。
+        首次传入的 `failures` 只在第一轮用，之后每轮重算——改进落地后错误会变。
+        """
+        history: list[Variant] = []
+        stagnant = 0
+        for round_index in range(max(1, max_rounds)):
+            fails = failures if (round_index == 0 and failures) else self.dev_failures()
+            if not fails:
+                break
+            results = self.step(fails, strategy=strategy, epsilon=epsilon, rng=rng)
+            history.extend(results)
+            if on_round is not None:
+                on_round(round_index + 1, results)
+            if any(v.accepted for v in results):
+                stagnant = 0
+            else:
+                stagnant += 1
+                if stagnant >= max(1, patience):
+                    break
+        return history
+
     def step(self, failures: list[tuple[str, str, str]], parent_id: str | None = None,
              strategy: str = "epsilon", epsilon: float = 0.3,
              rng: random.Random | None = None) -> list[Variant]:

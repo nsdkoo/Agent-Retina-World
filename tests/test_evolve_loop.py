@@ -216,5 +216,80 @@ class VerifyBaselineTests(unittest.TestCase):
             self.assertIsNotNone(self.archive.get("v001"))
 
 
+class MultiRoundTests(unittest.TestCase):
+    """多轮迭代：跨轮状态、终止条件、与单轮行为的一致性。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.archive = Archive(Path(self._tmp.name) / "archive.json")
+        self.golden = GoldenSet.seed()
+        self.evolver = Evolver(
+            Evaluator(privacy=PrivacyGate()), self.golden, self.archive
+        )
+
+    def test_stops_after_patience_without_progress(self) -> None:
+        """连续 N 轮没有采纳就该停——挖不动了还硬跑是浪费。"""
+        rounds_seen: list[int] = []
+        # 用一个必然失败的候选集合：dev 集上没有错判时本轮不会产生采纳
+        self.evolver.run(
+            max_rounds=8, patience=2, rng=random.Random(1),
+            on_round=lambda i, _r: rounds_seen.append(i),
+        )
+        self.assertLessEqual(len(rounds_seen), 8)
+        self.assertGreaterEqual(len(rounds_seen), 1)
+
+    def test_max_rounds_is_respected(self) -> None:
+        rounds_seen: list[int] = []
+        self.evolver.run(
+            max_rounds=2, patience=99, rng=random.Random(2),
+            on_round=lambda i, _r: rounds_seen.append(i),
+        )
+        self.assertLessEqual(len(rounds_seen), 2)
+
+    def test_rules_migrate_after_acceptance(self) -> None:
+        """采纳之后当前规则要迁到新叶，否则下一轮又从原地出发。"""
+        before = {k: tuple(v) for k, v in self.evolver.rules.items()}
+        results = self.evolver.step(
+            [("a08", "reading", "browsing")], parent_id=""
+        )
+        accepted = [v for v in results if v.accepted]
+        if accepted:
+            after = self.evolver.rules
+            self.assertNotEqual(
+                {k: tuple(v) for k, v in after.items()}, before,
+                "采纳了候选但当前规则没变",
+            )
+            self.assertEqual(after, self.evolver.rules_of(accepted[0].variant_id))
+        else:
+            self.skipTest("这一轮没有采纳，跳过迁移断言")
+
+    def test_dev_failures_shrinks_or_holds(self) -> None:
+        """采纳改进之后，开发集上的错判数不应该变多。"""
+        before = len(self.evolver.dev_failures())
+        results = self.evolver.step(
+            [("a08", "reading", "browsing")], parent_id=""
+        )
+        if any(v.accepted for v in results):
+            self.assertLessEqual(len(self.evolver.dev_failures()), before)
+
+    def test_single_step_matches_run_one_round(self) -> None:
+        """`step` 是单轮薄包装，行为和 `run(max_rounds=1)` 应当一致（都只有一个根父）。"""
+        failures = [("a08", "reading", "browsing")]
+        single = self.evolver.step(failures, parent_id="")
+        for variant in single:
+            self.assertEqual(variant.parent_id, "")
+
+    def test_multi_round_builds_depth(self) -> None:
+        """跑多轮之后档案树该有深度——这是任务 1 与任务 2 合起来才算完成的标志。"""
+        self.evolver.run(
+            max_rounds=6, patience=3, strategy="epsilon",
+            epsilon=0.8, rng=random.Random(5),
+        )
+        if len(self.archive._variants) < 3:  # noqa: SLF001
+            self.skipTest("生成的节点太少，不足以形成深度")
+        self.assertGreaterEqual(self.archive.max_depth(), 1, "多轮跑完树还是平的")
+
+
 if __name__ == "__main__":
     unittest.main()

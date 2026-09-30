@@ -104,16 +104,41 @@ def cmd_evolve(args: argparse.Namespace) -> int:
         print("\n  开发集上没有错判，没什么可进化的。")
         return 0
 
-    print(f"\n[2/3] 从 {len(failures)} 个错判里生成候选改进")
     evolver = Evolver(evaluator, golden, Archive(ARCHIVE_PATH))
-    results = evolver.step(failures)
+    rounds = max(1, args.rounds)
+    print(
+        f"\n[2/3] 多轮进化：最多 {rounds} 轮，选父策略 {args.strategy}"
+        f"，连续 {args.patience} 轮无采纳即停"
+    )
 
-    print(f"\n[3/3] 留出集验证（候选看不到这一部分，防奖励黑客）")
-    for variant in results:
-        print("  " + variant.summary())
+    def _report(round_index: int, results: list) -> None:
+        accepted_now = sum(1 for v in results if v.accepted)
+        parents = sorted({v.parent_id or "根" for v in results})
+        print(
+            f"\n  第 {round_index} 轮：生成 {len(results)} 个候选，"
+            f"采纳 {accepted_now}，父节点 {parents}"
+        )
+        for variant in results:
+            print("    " + variant.summary())
 
+    results = evolver.run(
+        max_rounds=rounds,
+        patience=args.patience,
+        strategy=args.strategy,
+        epsilon=args.explore_eps,
+        failures=failures,
+        on_round=_report,
+    )
+
+    print("\n[3/3] 汇总")
+    archive = evolver.archive
+    stats = archive.stats()
     accepted = [v for v in results if v.accepted]
-    print(f"\n  采纳 {len(accepted)}/{len(results)} 项。")
+    print(f"  共生成 {len(results)} 个候选，采纳 {len(accepted)} 个")
+    print(
+        f"  档案：{stats['total']} 个节点，最深 {archive.max_depth()} 层，"
+        f"根节点 {len(archive.roots())} 个"
+    )
     if accepted:
         print("  注意：这里只**验证**了改进有效，落地要人工把关键词并进 classify.py 的 _RULES。")
         print("  档案库记录了血缘，出问题可以一路回查。")
@@ -126,6 +151,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evolve", action="store_true", help="跑一轮自进化")
     parser.add_argument("--flywheel", action="store_true", help="查看飞轮候选池")
     parser.add_argument("--no-service", action="store_true", help="只用规则，不连本地模型服务")
+    parser.add_argument("--rounds", type=int, default=1, help="进化轮数（默认 1，保持旧行为）")
+    parser.add_argument("--patience", type=int, default=2,
+                        help="连续多少轮没有采纳就提前停（默认 2）")
+    parser.add_argument("--strategy", default="epsilon",
+                        choices=["best", "random", "epsilon", "weighted"],
+                        help="选父节点策略：best 纯利用 / random 纯探索 / epsilon 混合（默认）"
+                             " / weighted 按成绩与分支拥挤度加权")
+    parser.add_argument("--explore-eps", type=float, default=0.3,
+                        help="epsilon 策略下的探索概率（默认 0.3）")
     args = parser.parse_args(argv)
 
     if args.flywheel:
