@@ -27,12 +27,6 @@ logger = logging.getLogger(__name__)
 # 复合句的连接词：切在这上面，每段各自解析
 _CLAUSE_SPLIT = re.compile(r"然后|接着|之后|再帮|再|并且|并|同时|顺便|，|,|；|;")
 
-# 动作动词：一句话里出现两个以上不同动作，才值得走规划
-_ACTION_VERBS = (
-    "整理", "归类", "新建", "创建", "移动", "挪", "复制", "拷贝", "重命名", "改名",
-    "删除", "删掉", "打开", "关闭", "截图", "复制到", "发", "搜索", "查找",
-)
-
 _MAX_GOAL_CHARS = 300
 
 
@@ -99,8 +93,10 @@ class Planner:
             if not intent.tool:
                 return []  # 有一段接不住就整体放弃，交给 LLM 兜底
             spec = self.registry.get(intent.tool)
-            if spec is None or spec.risk > self.max_risk:
+            if spec is None:
                 return []
+            # 这里不按风险过滤：规则路径拆出来的是用户原话里的动作，风险交给
+            # PolicyEngine 在执行前拦（高风险会挂起等确认）；LLM 自己拟的步骤才限 max_risk
             steps.append(PlanStep(
                 goal=clause,
                 tool=intent.tool,

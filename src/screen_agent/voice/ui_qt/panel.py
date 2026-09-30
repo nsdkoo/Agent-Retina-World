@@ -450,6 +450,7 @@ class ChatPanel(QWidget):
         signals.partial.connect(self._on_partial)
         signals.result.connect(self._on_result_text)
         signals.prompt.connect(self._on_prompt)
+        signals.progress.connect(self._on_progress)
 
         self._reply_visible = False
         self._activity_visible = False
@@ -609,6 +610,10 @@ class ChatPanel(QWidget):
         self.add_bubble(text, "Info")
 
     # ---- 需要用户拍板：候选按钮 ----
+
+    def _on_progress(self, text: str) -> None:
+        """任务执行进度：走 Info 气泡（灰色小字），不抢正文位置、不播报。"""
+        self.add_info(text)
 
     def _on_prompt(self, question: str, options: list) -> None:
         """正文已经由 result 渲染过了，这里只负责把候选按钮摆出来。"""

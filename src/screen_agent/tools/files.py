@@ -134,13 +134,22 @@ def _resolve_input(text: str) -> Path:
 
 
 def _resolve_dst(text: str, src: Path) -> Path:
-    """目标解析：是目录就搬进去，否则当作完整目标路径。"""
+    """目标解析：是目录就搬进去，否则当作完整目标路径。
+
+    纯名字（「素材」这种不带路径的）先在源目录和桌面下找同名文件夹——用户说
+    「移动到 素材」时指的通常是桌面上那个已有的素材文件夹，不是相对路径。
+    """
     raw = (text or "").strip().strip("「」\"'")
     if not raw:
         return src.parent / src.name
     dst = _resolve_input(raw)
     if dst.is_dir():
         return dst / src.name
+    if "/" not in raw and "\\" not in raw and raw.lower() not in _DIR_ALIASES:
+        for base in (src.parent, _user_dir("Desktop")):
+            candidate = base / raw
+            if candidate.is_dir():
+                return candidate / src.name
     return dst
 
 

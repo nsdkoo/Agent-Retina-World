@@ -93,7 +93,16 @@ class PolicyEngine:
         if override is ToolPermission.ASK_BEFORE:
             return Decision.ASK, f"「{spec.name}」被设为每次都要确认"
 
-        if self._is_destructive(spec, params):
+        # 参数里带危险字眼是最该警惕的一类：工具本身可能很常规，参数却指向意料之外的用法。
+        # 它优先于所有模式与信任开关——信任工具不等于信任这次调用的参数。
+        if self._dangerous_params(params):
+            return Decision.ASK, "这一步看着不太对劲，需要你点头"
+
+        # 显式打开的「闭眼信任」：连不可逆工具也不再问
+        if self._mode is PermissionMode.AUTO and self.auto_allows_high:
+            return Decision.ALLOW, ""
+
+        if spec.name in _DESTRUCTIVE_TOOLS:
             return Decision.ASK, "这一步不可逆，需要你点头"
 
         if self._mode is PermissionMode.APPROVE:
@@ -138,9 +147,8 @@ class PolicyEngine:
     # ---- 内部 ----
 
     @staticmethod
-    def _is_destructive(spec: ToolSpec, params: dict) -> bool:
-        if spec.name in _DESTRUCTIVE_TOOLS:
-            return True
+    def _dangerous_params(params: dict) -> bool:
+        """参数值里蹦出「删除 / 格式化 / 覆盖」这类字眼，说明这次调用的意图可疑。"""
         blob = " ".join(str(v) for v in (params or {}).values())
         return any(hint in blob for hint in _DESTRUCTIVE_HINTS)
 

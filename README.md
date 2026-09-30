@@ -11,6 +11,7 @@
 | 文档 | 说明 |
 | --- | --- |
 | [记忆系统设计](docs/memory-design.md) | **三层记忆对标 Letta/Mem0/Zep/GA + 2026 最新研究（睡眠门控/类型衰减/溯源）** |
+| [Agent 运行时架构](docs/agent-architecture.md) | **事件流 + 状态机 + 权限策略 + 规划，对标 OpenHands / goose / Cline / Pi** |
 | --- | --- |
 | [开发过程记录](docs/development-journal.md) | **版本演进、Git 时间线、简历叙事** |
 | [变更日志](docs/CHANGELOG.md) | 按版本摘要 |
@@ -18,6 +19,15 @@
 | [架构设计](docs/architecture.md) | 系统设计 |
 | [语音助手](docs/voice-assistant.md) | 唤醒、会话、指令 |
 | [Demo 试跑](docs/demo-quickstart.md) | 5 步本地验证 |
+
+## v1.0 更新 · Agent 运行时
+
+- **会拆任务了**：「新建文件夹 素材 然后 把 桌面/报告.pdf 移动到 素材」拆成两步依次执行，每步结果实时回报
+- **事件流驱动**：plan / action / observation / ask / state_changed 全走一条事件总线，UI 与日志都只是订阅者（对标 OpenHands 的 EventStream）
+- **权限策略**：auto / approve / smart / chat 四种模式，可给单个工具记「以后别问」（对标 goose）；参数里带「删除 / 格式化」这类字眼一律先拦
+- **挂起与恢复**：需要拍板的步骤挂起等一句话，答「继续 / 跳过 / 取消」接着走；说别的算改变方向，任务停掉、那句话正常走后续路由（对标 Pi 的 steering）
+- **轨迹落盘**：任务 / 步骤 / 事件进 SQLite，重启后能查「昨天那个活儿做到哪了」
+- 详见 [Agent 运行时架构](docs/agent-architecture.md)
 
 ## v0.9 更新 · 文件操作 + 交互式选项
 
@@ -245,7 +255,9 @@ embedding:
 - [x] P1 向量检索（硅基流动 bge-m3 免费）+ 梦境期 LLM 提取 + supersede 对账 + 反思回填
 - [x] P2 前瞻记忆（到点主动提醒）+ 梦境重组（跨域找连接）+ 记忆评测基准（benchmarks/memory_eval.py 7 场景）
 - [x] v0.9 文件操作工具集（白名单 / 回收站 / 可撤销）+ 目录归档三阶段 + 交互式选项
+- [x] v1.0 Agent 运行时（事件流 / 状态机 / 权限策略 / 规划 / 轨迹持久化）
 - [ ] 跨会话任务归并与证据追溯
+- [ ] Agent 任务续跑：启动时检测未完成任务并提示接着做
 
 ## License
 

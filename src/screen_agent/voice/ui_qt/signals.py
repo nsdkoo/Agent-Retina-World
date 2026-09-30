@@ -12,3 +12,4 @@ class AssistantSignals(QObject):
     result = pyqtSignal(str)        # 执行结果 / 助手回复
     session = pyqtSignal(bool)      # 连续对话开/关
     prompt = pyqtSignal(str, list)  # 需要用户拍板：问题 + 候选按钮（点选后回传指令）
+    progress = pyqtSignal(str)      # 任务执行进度：Agent 每步一行，小字显示、不播报

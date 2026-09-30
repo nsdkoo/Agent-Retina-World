@@ -19,6 +19,12 @@ embedding:
 activity:
   merge_window_minutes: 3
 
+# Agent 运行时：多步任务拆解 + 权限审批 + 轨迹持久化（数据落 data/agent/）
+agent:
+  enabled: true
+  permission_mode: smart   # auto 全自动 | approve 每次问 | smart 智能批准 | chat 仅对话
+  max_steps: 5             # 单次任务最多拆成几步
+
 vlm:
   provider: heuristic              # heuristic | openai_compatible
   base_url: http://127.0.0.1:8000/v1

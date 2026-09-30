@@ -3,6 +3,43 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。  
 详细过程见 [development-journal.md](development-journal.md)。
 
+## [1.0.0] - 2026-09-30
+
+### 新增
+
+- **Agent 运行时**（`src/screen_agent/agent/`）：把「单步意图 + 自由对话」升级成完整 Agent 架构
+  - `events.py` 事件总线：plan / action / observation / ask / state_changed / finish，
+    UI 与日志都只是订阅者，加一路观测不用碰主循环
+  - `state.py` 任务状态机：9 态显式迁移表，非法跳转直接拒；带步骤记录与断点游标
+  - `policy.py` 权限策略：四种模式（auto / approve / smart / chat）× 工具级
+    AlwaysAllow / AskBefore / NeverAllow × 危险参数拦截
+  - `planner.py` 规划器：复合句切分交给意图层试跑，切不动交 LLM 出 JSON 并强校验
+    （工具已注册、参数键合法、步数上限）
+  - `controller.py` 主循环：规划 → 逐步执行 → 审批挂起 → 恢复 → 汇总
+  - `trajectory.py` 轨迹持久化：tasks / steps / events 三表落 SQLite，支持续跑
+- **多步任务**：「新建文件夹 素材 然后 把 桌面/报告.pdf 移动到 素材」会被拆成两步依次执行
+- **事件可观测**：任务每步进度推给面板（Info 小字，不语音播报）
+- **Steering / Follow-up**：挂起时说别的算改变方向（任务停掉、那句话交回正常路由）；
+  想「做完这件再做那件」用 `follow_up()` 排队
+- **并行只读步骤**：连续安全步骤线程池并行，有副作用的一律串行
+
+### 变更
+
+- `files._resolve_dst` 支持短名目标：「把 X 移动到 素材」会先在源目录与桌面找同名文件夹，
+  不再当成相对路径被白名单挡掉
+- `config.yaml` / `config.example.yaml` 新增 `agent` 段（enabled / permission_mode / max_steps）
+
+### 修复
+
+- sqlite 连接未关闭：Windows 上 `with sqlite3.connect(...)` 只是事务上下文，连接不关，
+  临时库文件被锁住（测试清理报 WinError 32）
+- `auto_allows_high` 被危险动作检查短路，那个开关实际不生效
+- 并行分组绕过打转检测：并行候选现在同样计入签名次数
+
+### 测试
+
+- 新增 `tests/test_agent_core.py`（37 例），全仓 142 例
+
 ## [0.9.0] - 2026-09-30
 
 ### 新增

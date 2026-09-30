@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -73,10 +74,20 @@ class TrajectoryStore:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
+        """sqlite 连接上下文：必须显式 close。
+
+        Windows 上 `with sqlite3.connect(...)` 只是事务上下文（commit / rollback），
+        连接根本不关；临时库文件于是被锁住，测试清理时报 WinError 32。
+        """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     # ---- 写 ----
 

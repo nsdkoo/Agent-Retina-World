@@ -186,6 +186,25 @@ class VoiceAssistant:
         self._on_session: Callable[[bool], None] | None = None
         self._on_options: Callable[[str, list[str]], None] | None = None
         self._pending_options: tuple[str, list[str]] | None = None
+        self._on_progress: Callable[[str], None] | None = None
+
+        # ---- Agent 运行时：多步任务规划 + 权限审批 + 轨迹持久化 ----
+        agent_cfg = raw.get("agent", {}) if isinstance(raw.get("agent", {}), dict) else {}
+        from screen_agent.agent import build_agent
+        from screen_agent.agent.events import EventType
+
+        self.agent = build_agent(
+            root,
+            chat_client=chat_client,
+            app_aliases=self.app_aliases,
+            url_aliases=self.url_aliases,
+            mode=str(agent_cfg.get("permission_mode", "smart")),
+            max_steps=int(agent_cfg.get("max_steps", 5)),
+            enabled=bool(agent_cfg.get("enabled", True)),
+        )
+        if self.agent is not None:
+            # 事件流是唯一观测口：UI 订阅进度，日志订阅全量，谁都不用改主循环
+            self.agent.stream.subscribe(EventType.OBSERVATION, self._on_agent_step)
 
     @staticmethod
     def _chat_model_hint(chat_cfg: dict) -> str:
@@ -245,6 +264,21 @@ class VoiceAssistant:
     def emit_options(self, text: str, options: list[str]) -> None:
         if self._on_options:
             self._on_options(text, options)
+
+    def on_progress(self, cb: Callable[[str], None]) -> None:
+        """注册任务进度回调：Agent 每步的结果，UI 用小字显示、不语音播报（免得吵）。"""
+        self._on_progress = cb
+
+    def emit_progress(self, text: str) -> None:
+        if self._on_progress and text:
+            self._on_progress(text)
+
+    def _on_agent_step(self, event) -> None:  # noqa: ANN001 - agent.events.Event
+        """挂在事件流上的进度上报：Agent 每步结束推一行给 UI。"""
+        try:
+            self.emit_progress(event.brief())
+        except Exception:  # noqa: BLE001 - 进度失败不能影响任务本身
+            logger.debug("任务进度上报失败", exc_info=True)
 
     def _flush_options(self, result: ActionResult | None) -> ActionResult | None:
         """暂存候选，等 emit_result 播完正文再交给 UI——顺序反了按钮会先于文字冒出来。"""
@@ -318,7 +352,30 @@ class VoiceAssistant:
         command = (command or "").strip()
         if not command:
             return None
+
+        # 挂起中的任务优先接管这句话：答「继续 / 跳过 / 取消」就恢复执行；
+        # 说别的按 Pi 的 steering 语义处理——任务停掉，这句话交回下面正常路由
+        if self.agent is not None:
+            resumed = self.agent.try_resume(command)
+            if resumed is not None:
+                self._last_activity = time.monotonic()
+                self._extend_session()
+                return self._flush_options(resumed)
+
         intent = parse_intent(command, self.app_aliases, self.url_aliases)
+
+        # 多步任务交给 AgentController：规则切句优先、LLM 兜底，全程事件可观测。
+        # 注意别在这里先卡 intent.type——单步规则的正则很贪婪，复合句会被判成某个
+        # 单步意图（如 file_op），拿它当门槛就永远进不来。交给 planner 自己判断。
+        if self.agent is not None and self.agent.planner.looks_like_task(command):
+            result = self.agent.run(command)
+            self._last_activity = time.monotonic()
+            if self.session_enabled and not self._in_session:
+                self._set_session(True)
+            else:
+                self._extend_session()
+            return self._flush_options(result)
+
         result = self.executor.run(intent)
         self._last_activity = time.monotonic()
         if (

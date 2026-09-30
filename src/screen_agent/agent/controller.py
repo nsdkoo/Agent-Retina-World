@@ -184,10 +184,18 @@ class AgentController:
                 self._run_one(step)
             continue
 
+    def _signature(self, step) -> str:
+        return f"{step.tool}:{sorted(step.params.items())}"
+
     def _collect_parallel(self, state: AgentState) -> list:
-        """从游标往后收一串「SAFE + 放行」的步骤；写操作一律不并。"""
-        group = []
-        index = state.cursor
+        """把当前步后面连续的一串「SAFE + 放行」步骤也收进来一起并行。
+
+        写操作一律不并；签名已经出现过 max_step_repeats 次的也不并——
+        否则并行这条路径会绕开 _advance 里的打转检测。
+        """
+        current = state.current_step()
+        group = [current] if current is not None else []
+        index = state.cursor + 1
         while index < len(state.steps) and len(group) < self.max_parallel:
             candidate = state.steps[index]
             spec = self.registry.get(candidate.tool)
@@ -196,6 +204,10 @@ class AgentController:
             decision, _ = self.policy.judge(spec, candidate.params)
             if decision is not Decision.ALLOW:
                 break
+            signature = self._signature(candidate)
+            if self._seen.get(signature, 0) >= self.max_step_repeats:
+                break
+            self._seen[signature] = self._seen.get(signature, 0) + 1
             group.append(candidate)
             index += 1
         return group

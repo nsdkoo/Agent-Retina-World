@@ -412,6 +412,7 @@ class QtFloatingBall:
         self.assistant.on_result(on_result)
         self.assistant.on_result_delta(on_delta)
         self.assistant.on_options(on_options)
+        self.assistant.on_progress(signals.progress.emit)
 
         def play_start_chain() -> None:
             self.assistant.audio_loop.set_muted_mic()
