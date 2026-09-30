@@ -1,14 +1,15 @@
-# Agent-Retina-World 开发过程记录
+# Agent-Rita 开发过程记录
 
 > **维护**：每完成一个 Plan 或版本里程碑，更新本文 + `docs/plans/` 归档。  
-> **仓库**：https://github.com/nsdkoo/Agent-Retina-World  
-> **本地路径**：`D:\Agent-Retina`
+> **仓库**：https://github.com/nsdkoo/Agent-Rita  
+> **本地路径**：`D:\素材存储\Agent-Rita`
+> **改名历史**：`Agent-Retina-World` → `Agent-Retina` → `Agent-Rita`（2026-09-30 统一）
 
 ---
 
 ## 1. 项目定位（对外口径）
 
-**Agent-Retina-World** — 个人原创的桌面**屏幕世界感知 Agent**。
+**Agent-Rita** — 个人原创的桌面**屏幕世界感知 Agent**。
 
 核心链路：
 
