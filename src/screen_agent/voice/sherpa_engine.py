@@ -369,7 +369,7 @@ class SenseVoiceRefiner:
         model = _find_one(model_dir, ["*model*.int8.onnx", "*model*.onnx"])
         tokens = model_dir / "tokens.txt"
         logger.info("加载 SenseVoice 精修模型: %s", model_dir.name)
-        self.recognizer = sherpa_onnx.OfflineRecognizer.from_sensevoice(
+        self.recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
             str(model),
             str(tokens),
             num_threads=num_threads,
@@ -382,4 +382,4 @@ class SenseVoiceRefiner:
         stream = self.recognizer.create_stream()
         stream.accept_waveform(SAMPLE_RATE, samples)
         self.recognizer.decode_stream(stream)
-        return str(self.recognizer.get_result(stream)).strip()
+        return str(stream.result.text).strip()

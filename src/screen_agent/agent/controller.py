@@ -1,0 +1,395 @@
+"""Agent 主循环：规划 → 逐步执行 → 审批挂起 → 恢复 → 汇总。
+
+对齐四家的做法，各取所长：
+
+- **OpenHands**：状态机 + Action/Observation 事件对。控制器只负责驱动循环，不替 Agent 决策；
+  状态迁移显式声明，挂起时不销毁现场
+- **block/goose**：动手前必过权限关（PolicyEngine），危险动作一律挂起等确认
+- **Cline**：Plan 与 Act 分离，计划要给人看；任务状态落盘，进程重启可续跑
+- **Pi**：事件流即审计轨迹；Steering / Follow-up 双队列区分「改变方向」和「待会儿再做」；
+  独立只读步骤并行、有副作用的串行；同一动作重复多次即判定在原地打转
+
+三条不变量：
+1. 任何一步执行前必过 `policy.judge`，没有绕过路径
+2. 挂起不丢现场：游标停在原地，`resume` 从原处接着走
+3. 失败不吞：单步失败如实记 FAILED 并继续，最后汇总里报出来
+"""
+
+from __future__ import annotations
+
+import logging
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+
+from screen_agent.agent.events import Event, EventStream, EventType
+from screen_agent.agent.planner import Planner
+from screen_agent.agent.policy import Decision, PolicyEngine, ToolPermission
+from screen_agent.agent.state import AgentState, StepStatus, TaskState
+from screen_agent.agent.trajectory import TrajectoryStore
+from screen_agent.tools.base import ActionResult
+from screen_agent.tools.registry import RiskLevel, ToolRegistry
+
+logger = logging.getLogger(__name__)
+
+# 用户对挂起问题的回答（本机人说人话，别指望关键词命中率 100%，宁可漏判也不算错）
+_CONFIRM_WORDS = ("继续", "确认", "执行", "可以", "好", "是的", "对", "嗯", "动手", "接着", "ok", "OK")
+_SKIP_WORDS = ("跳过", "略过", "下一步", "不管这步", "略")
+_CANCEL_WORDS = ("取消", "算了", "不做了", "不做", "停", "别做", "放弃", "不用了")
+
+
+class AgentController:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        planner: Planner,
+        policy: PolicyEngine | None = None,
+        stream: EventStream | None = None,
+        trajectory: TrajectoryStore | None = None,
+        max_iterations: int = 8,
+        max_parallel: int = 3,
+        max_step_repeats: int = 2,
+    ) -> None:
+        self.registry = registry
+        self.planner = planner
+        self.policy = policy or PolicyEngine()
+        self.stream = stream or EventStream()
+        self.trajectory = trajectory
+        self.max_iterations = max_iterations
+        self.max_parallel = max_parallel
+        self.max_step_repeats = max_step_repeats
+
+        self._state: AgentState | None = None
+        self._seen: dict[str, int] = {}       # (tool, params) → 出现次数，防原地打转
+        self._follow_ups: deque[str] = deque()  # Pi 式 Follow-up：做完了接着做
+
+    # ---- 只读视图 ----
+
+    @property
+    def state(self) -> AgentState | None:
+        return self._state
+
+    @property
+    def is_waiting(self) -> bool:
+        return self._state is not None and self._state.state in (
+            TaskState.AWAITING_USER_CONFIRMATION,
+            TaskState.AWAITING_USER_INPUT,
+        )
+
+    @property
+    def is_running(self) -> bool:
+        return self._state is not None and self._state.state in (
+            TaskState.PENDING, TaskState.PLANNING, TaskState.RUNNING,
+        )
+
+    # ---- 入口 ----
+
+    def run(self, goal: str) -> ActionResult:
+        """跑一个新任务；队列里攒着 Follow-up 的话，跑完自动接着下一个。"""
+        result = self._run_once(goal)
+        while not self.is_waiting and self._follow_ups:
+            nxt = self._follow_ups.popleft()
+            tail = self._run_once(nxt)
+            result = ActionResult(
+                success=result.success and tail.success,
+                message=f"{result.message}\n{tail.message}",
+                detail={"chained": True},
+                options=tail.options,
+            )
+        return result
+
+    def _run_once(self, goal: str) -> ActionResult:
+        state = AgentState(goal=goal)
+        self._state = state
+        self._seen.clear()
+        self._publish(EventType.USER_MESSAGE, {"text": goal}, state)
+
+        self._transition(state, TaskState.PLANNING)
+        try:
+            steps = self.planner.plan(goal)
+        except Exception as exc:  # noqa: BLE001 - 规划器异常不该炸掉整个助手
+            logger.exception("规划失败")
+            state.fail(f"规划失败：{exc}")
+            self._persist(state)
+            return ActionResult(success=False, message=f"拆解任务时出错：{exc}")
+
+        if not steps:
+            state.fail("拆不出可执行的步骤")
+            self._persist(state)
+            return ActionResult(
+                success=False,
+                message=f"「{goal}」我没拆成可执行的步骤，你可以说得更具体一点",
+            )
+
+        state.load_plan(steps)
+        self._publish(EventType.PLAN, {
+            "count": len(steps),
+            "steps": [{"goal": s.goal, "tool": s.tool, "why": s.why} for s in steps],
+        }, state)
+        self._transition(state, TaskState.RUNNING)
+        self._persist(state)
+        return self._advance()
+
+    # ---- 主循环 ----
+
+    def _advance(self) -> ActionResult:
+        state = self._state
+        assert state is not None
+        while True:
+            step = state.current_step()
+            if step is None:
+                return self._finish()
+
+            if state.iteration >= self.max_iterations:
+                state.error = f"已达迭代上限 {self.max_iterations} 步"
+                self._transition(state, TaskState.STOPPED)
+                self._persist(state)
+                return ActionResult(
+                    success=False,
+                    message=f"这活儿步骤太多，我先停下（{state.done_count()}/{len(state.steps)} 步完成）。"
+                            f"可以把目标拆小一点再让我做",
+                )
+            state.iteration += 1
+
+            spec = self.registry.get(step.tool)
+            if spec is None:
+                self._mark(step, StepStatus.SKIPPED, f"没有这个工具：{step.tool}", False)
+                state.cursor += 1
+                self._persist(state)
+                continue
+
+            signature = f"{step.tool}:{sorted(step.params.items())}"
+            self._seen[signature] = self._seen.get(signature, 0) + 1
+            if self._seen[signature] > self.max_step_repeats:
+                # Pi 式打转检测：同一个动作来回做，基本是计划坏了
+                self._mark(step, StepStatus.SKIPPED, "这步和前面重复，跳过", False)
+                state.cursor += 1
+                self._persist(state)
+                continue
+
+            decision, reason = self.policy.judge(spec, step.params)
+            if decision is Decision.DENY:
+                self._mark(step, StepStatus.SKIPPED, reason or "被策略拒绝", False)
+                state.cursor += 1
+                self._persist(state)
+                continue
+            if decision is Decision.ASK:
+                return self._suspend(step, reason)
+
+            # 连续的只读步骤攒一批并行跑（Pi 默认并行工具执行；写操作仍串行）
+            group = self._collect_parallel(state)
+            if len(group) > 1:
+                self._run_parallel(group)
+            else:
+                self._run_one(step)
+            continue
+
+    def _collect_parallel(self, state: AgentState) -> list:
+        """从游标往后收一串「SAFE + 放行」的步骤；写操作一律不并。"""
+        group = []
+        index = state.cursor
+        while index < len(state.steps) and len(group) < self.max_parallel:
+            candidate = state.steps[index]
+            spec = self.registry.get(candidate.tool)
+            if spec is None or spec.risk is not RiskLevel.SAFE:
+                break
+            decision, _ = self.policy.judge(spec, candidate.params)
+            if decision is not Decision.ALLOW:
+                break
+            group.append(candidate)
+            index += 1
+        return group
+
+    def _run_parallel(self, group: list) -> None:
+        state = self._state
+        assert state is not None
+        with ThreadPoolExecutor(max_workers=len(group)) as pool:
+            futures = {pool.submit(self._invoke, step): step for step in group}
+            for future in futures:
+                step = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    result = ActionResult(success=False, message=str(exc))
+                self._settle(step, result)
+        state.cursor += len(group)
+        self._persist(state)
+
+    def _run_one(self, step) -> None:
+        state = self._state
+        assert state is not None
+        result = self._invoke(step)
+        self._settle(step, result)
+        state.cursor += 1
+        self._persist(state)
+
+    def _invoke(self, step) -> ActionResult:
+        self._publish(EventType.ACTION, {
+            "goal": step.goal, "tool": step.tool, "params": step.params, "why": step.why,
+        }, self._state, step.index + 1)
+        try:
+            return self.registry.run(step.tool, **step.params)
+        except Exception as exc:  # noqa: BLE001 - 工具层异常统一转成失败观察
+            logger.exception("工具执行异常：%s", step.tool)
+            return ActionResult(success=False, message=f"执行失败：{exc}")
+
+    def _settle(self, step, result: ActionResult) -> None:
+        step.ended_at = datetime.now()
+        self._mark(
+            step,
+            StepStatus.DONE if result.success else StepStatus.FAILED,
+            result.message,
+            result.success,
+        )
+        self._publish(EventType.OBSERVATION, {
+            "goal": step.goal, "tool": step.tool,
+            "success": result.success, "message": result.message,
+            "elapsed_ms": step.elapsed_ms,
+        }, self._state, step.index + 1)
+
+    # ---- 挂起与恢复 ----
+
+    def _suspend(self, step, reason: str) -> ActionResult:
+        state = self._state
+        assert state is not None
+        step.status = StepStatus.AWAITING
+        self._transition(state, TaskState.AWAITING_USER_CONFIRMATION)
+        question = f"第 {step.index + 1} 步：{step.goal}。{reason or '要你点头才动手'}"
+        options = ["继续执行", "跳过这一步", "取消任务"]
+        self._publish(EventType.ASK, {
+            "question": question, "options": options,
+            "tool": step.tool, "params": step.params,
+        }, state, step.index + 1)
+        self._persist(state)
+        return ActionResult(success=True, message=question, options=options, detail={"ask": True})
+
+    def try_resume(self, text: str) -> ActionResult | None:
+        """挂起状态下先把用户这句话当回答猜一次；猜不中返回 None，交回上层正常路由。
+
+        Pi 的双队列语义在这里落地：
+        - 答「继续 / 跳过 / 取消」→ 回答当前问题
+        - 说别的（看起来是新指令）→ 判定为 Steering，打断当前任务并让上层按新指令走
+        """
+        if not self.is_waiting:
+            return None
+        state = self._state
+        assert state is not None
+        answer = (text or "").strip()
+        if not answer:
+            return None
+
+        if any(w in answer for w in _CANCEL_WORDS):
+            return self.cancel()
+        if any(w in answer for w in _SKIP_WORDS):
+            step = state.current_step()
+            if step is not None:
+                self._mark(step, StepStatus.SKIPPED, "按你的意思跳过", False)
+                state.cursor += 1
+            self._transition(state, TaskState.RUNNING)
+            self._persist(state)
+            return self._advance()
+        if any(w in answer for w in _CONFIRM_WORDS):
+            step = state.current_step()
+            if step is None:
+                self._transition(state, TaskState.RUNNING)
+                return self._finish()
+            self._transition(state, TaskState.RUNNING)
+            result = self._invoke(step)
+            self._settle(step, result)
+            state.cursor += 1
+            self._persist(state)
+            return self._advance()
+
+        # 不是回答——按 Steering 处理：停掉当前任务，把控制权交回上层
+        self._mark_waiting_step_as_skipped()
+        state.error = "用户改变了方向"
+        if state.can_transition(TaskState.STOPPED):
+            self._transition(state, TaskState.STOPPED)
+        self._persist(state)
+        return None
+
+    def _mark_waiting_step_as_skipped(self) -> None:
+        step = self._state.current_step() if self._state else None
+        if step is not None and step.status is StepStatus.AWAITING:
+            self._mark(step, StepStatus.SKIPPED, "你换方向了，这步没做", False)
+
+    def follow_up(self, text: str) -> None:
+        """Pi 式 Follow-up：当前任务做完之后再接着做这件事。"""
+        if text.strip():
+            self._follow_ups.append(text.strip())
+
+    def cancel(self) -> ActionResult:
+        state = self._state
+        if state is None or not self.is_waiting:
+            return ActionResult(success=False, message="现在没有等你拍板的任务")
+        self._mark_waiting_step_as_skipped()
+        self._transition(state, TaskState.REJECTED)
+        self._persist(state)
+        self._publish(EventType.FINISH, {"summary": state.summary()}, state)
+        return ActionResult(success=True, message=state.summary())
+
+    # ---- 收尾 ----
+
+    def _finish(self) -> ActionResult:
+        state = self._state
+        assert state is not None
+        done, total = state.done_count(), len(state.steps)
+        failed = state.failed_steps()
+        lines = [f"做完了 {done}/{total} 步："]
+        for step in state.steps:
+            mark = {"done": "✓", "failed": "✗", "skipped": "–"}.get(step.status.value, "·")
+            detail = (step.observation or "").split("\n")[0][:40]
+            lines.append(f"  {mark} {step.goal}{('：' + detail) if detail else ''}")
+        summary = "\n".join(lines)
+        if failed:
+            summary += f"\n有 {len(failed)} 步没成，可以单独让我重做"
+        state.finish(summary)
+        self._publish(EventType.FINISH, {"summary": summary}, state)
+        self._persist(state)
+        return ActionResult(success=not failed, message=summary, detail={"task_id": state.task_id})
+
+    # ---- 事件与持久化 ----
+
+    def _publish(self, kind: EventType, payload: dict, state: AgentState | None, step: int = 0) -> None:
+        event = Event(
+            type=kind, payload=payload,
+            task_id=state.task_id if state else "", step=step,
+        )
+        self.stream.publish(event)
+        if self.trajectory is not None:
+            self.trajectory.log_event(event)
+
+    def _transition(self, state: AgentState, target: TaskState) -> None:
+        try:
+            previous, current = state.transition(target)
+        except Exception:  # noqa: BLE001 - 非法跳转不该掀翻主循环
+            logger.warning("非法状态迁移：%s → %s", state.state.value, target.value)
+            return
+        self._publish(EventType.STATE_CHANGED, {
+            "from": previous.value, "to": current.value,
+        }, state)
+
+    def _persist(self, state: AgentState) -> None:
+        if self.trajectory is not None:
+            try:
+                self.trajectory.save(state)
+            except Exception:  # noqa: BLE001 - 落盘失败不影响本次执行
+                logger.debug("轨迹落盘失败", exc_info=True)
+
+    @staticmethod
+    def _mark(step, status: StepStatus, observation: str, success: bool) -> None:
+        step.status = status
+        step.observation = observation or ""
+        step.success = success
+        if step.ended_at is None:
+            step.ended_at = datetime.now()
+
+    # ---- 权限快捷操作（UI / 意图层用） ----
+
+    def allow_always(self, tool_name: str) -> None:
+        self.policy.remember(tool_name, ToolPermission.ALWAYS_ALLOW)
+
+    def mode_label(self) -> str:
+        from screen_agent.agent.policy import MODE_LABELS
+
+        return MODE_LABELS.get(self.policy.mode, self.policy.mode.value)
