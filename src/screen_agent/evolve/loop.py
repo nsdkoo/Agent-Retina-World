@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -92,9 +93,34 @@ class Archive:
         return chain
 
     def next_id(self, offset: int = 0) -> str:
-        """下一个可用 ID。生成候选时用 offset 预留位次——那会儿还没入库，
-        不偏移的话一批候选会全叫 v001。"""
-        return f"v{len(self._variants) + offset + 1:03d}"
+        """下一个可用 ID。
+
+        按**现有最大编号**递增，不是按条数——多轮迭代里会有加载、乱序、甚至删号的
+        情况，按条数算必然撞号；一撞号 `get()` 就取到别人，血缘整个乱掉。
+        """
+        biggest = 0
+        for variant_id in self._variants:
+            if variant_id.startswith("v") and variant_id[1:].isdigit():
+                biggest = max(biggest, int(variant_id[1:]))
+        return f"v{biggest + offset + 1:03d}"
+
+    # ---- 树 ----
+    # 树关系只靠 parent_id 表达，不额外维护 children 字段——
+    # 这样 JSON 结构不变，老档案可以直接读，反查成本也可以忽略（档案规模就几十上百个）
+
+    def roots(self) -> list[Variant]:
+        """根节点：没有父节点的变体（直接基于基础规则变异出来的）。"""
+        return [v for v in self._variants.values() if not v.parent_id]
+
+    def children(self, variant_id: str) -> list[Variant]:
+        return [v for v in self._variants.values() if v.parent_id == variant_id]
+
+    def depth(self, variant_id: str) -> int:
+        """层深，根为 0。"""
+        return max(0, len(self.lineage(variant_id)) - 1)
+
+    def max_depth(self) -> int:
+        return max((self.depth(v) for v in self._variants), default=0)
 
     def stats(self) -> dict:
         return {
@@ -144,7 +170,10 @@ class Evolver:
         self.evaluator = evaluator
         self.golden = golden
         self.archive = archive or Archive()
-        self.rules = rules if rules is not None else self._load_rules()
+        # 基础规则是所有变异的共同起点，**永不改动**。
+        # `rules_of()` 从它出发逐个重放 payload 增量，还原出任意节点的完整规则。
+        self._base_rules = self._load_rules()
+        self.rules = rules if rules is not None else dict(self._base_rules)
 
     @staticmethod
     def _load_rules() -> dict[str, tuple[str, ...]]:
@@ -152,18 +181,85 @@ class Evolver:
 
         return {activity: tuple(hints) for activity, hints in classify._RULES}
 
+    # ---- 血缘 → 规则 ----
+
+    def rules_of(self, variant_id: str) -> dict[str, tuple[str, ...]]:
+        """还原某个节点对应的完整规则集：基础规则 + 从根到它的每一处增量。
+
+        **包含该节点自身的增量**（不管它有没有被采纳）——"这条配置"就是它的语义；
+        `accepted` 只表示它相对父基线有没有过门禁，是两回事。
+
+        这是让 `parent_id` 真正参与计算的关键：以前 `verify` 拿的是"当前累积规则"，
+        所有候选共享同一基线，血缘纯属摆设。
+        """
+        rules = {name: tuple(hints) for name, hints in self._base_rules.items()}
+        if not variant_id:
+            return rules
+        chain = list(reversed(self.archive.lineage(variant_id)))   # 根 → 叶
+        for node_id in chain:
+            node = self.archive.get(node_id)
+            if node is None:
+                continue
+            activity = node.payload.get("activity")
+            keywords = list(node.payload.get("keywords") or [])
+            if activity and keywords:
+                rules[activity] = tuple(keywords) + tuple(rules.get(activity, ()))
+        return rules
+
+    # ---- 选父节点：探索与利用 ----
+
+    def sample_parent(
+        self,
+        strategy: str = "epsilon",
+        epsilon: float = 0.3,
+        rng: random.Random | None = None,
+    ) -> str:
+        """挑一个父节点来变异。返回 `""` 表示直接从基础规则下手。
+
+        DGM 的消融实验说明这件事很值：去掉开放探索，成绩从 50% 掉到 23%。
+        只从 `best()` 变异就是"没有开放探索"那一档——全档案只走一条线，
+        一旦走进局部最优就再也出不来。
+
+        - `best`   只挑已采纳里 holdout 最高的（纯利用，等价旧行为）
+        - `random` 全档案均匀采样（纯探索）
+        - `epsilon` ε-greedy，默认：小概率探索、大概率利用
+        - `weighted` 按 `holdout_f1² / (1 + 已有子节点数)` 采样——
+                     用平方拉开差距、用子节点数抑制过度开发同一分支
+        """
+        pool = list(self.archive._variants.values())  # noqa: SLF001 - 同模块内部使用
+        if not pool:
+            return ""
+        rng = rng or random
+        accepted = [v for v in pool if v.accepted]
+
+        if strategy == "random":
+            return rng.choice(pool).variant_id
+        if strategy == "best":
+            return max(accepted, key=lambda v: v.holdout_f1).variant_id if accepted else ""
+        if strategy == "epsilon" and rng.random() < epsilon:
+            return rng.choice(pool).variant_id          # 探索：全档案里随机挑一个
+        if strategy == "weighted" and accepted:
+            weights = [
+                max(v.holdout_f1, 1e-6) ** 2 / (1 + len(self.archive.children(v.variant_id)))
+                for v in accepted
+            ]
+            return rng.choices(accepted, weights=weights, k=1)[0].variant_id
+        return max(accepted, key=lambda v: v.holdout_f1).variant_id if accepted else ""
+
     # ---- 生成候选 ----
 
     def propose_from_failures(self, failures: list[tuple[str, str, str]],
-                              limit: int = 4) -> list[Variant]:
+                              limit: int = 4, parent_id: str = "") -> list[Variant]:
         """按目标类别聚合失败案例，每类生成一个候选（可含多个关键词）。
 
         逐个案例生成太保守——同一类往往一次错好几条，一条条修效率太低，
         而且每条只加一个词，验证时几乎看不出提升（实测就是这样：14 个错判只采纳了 1 项）。
         按 `expect` 分组后，一个候选就能把该类的高频关键词一起补上。
 
-        聚合还有一层好处：**一次改动解决一类问题**，语义清楚、回滚也干净。
+        **变异基于 `parent_id` 的规则**，不是当前的累积规则——否则同一个父节点
+        生出来的候选会互相看不见对方，血缘也没意义。
         """
+        parent_rules = self.rules_of(parent_id)
         grouped: dict[str, list[str]] = {}
         for case_id, expect, _got in failures:
             grouped.setdefault(expect, []).append(case_id)
@@ -178,18 +274,19 @@ class Evolver:
                 keyword = _pick_keyword(case.text, case.window_title)
                 if keyword and keyword not in keywords:
                     keywords.append(keyword)
-            current = tuple(self.rules.get(expect, ()))
+            current = tuple(parent_rules.get(expect, ()))
             fresh = [k for k in keywords if k not in current]
             if not fresh:
                 continue
             proposals.append(Variant(
                 variant_id=self.archive.next_id(offset=index),
-                parent_id=(self.archive.best().variant_id if self.archive.best() else ""),
+                parent_id=parent_id,
                 kind="rules",
                 payload={"activity": expect, "keywords": fresh},
                 rationale=(
                     f"{expect} 类错了 {len(case_ids)} 条，"
                     f"补关键词 {'、'.join(fresh[:4])}"
+                    + (f"（基于 {parent_id}）" if parent_id else "（基于基础规则）")
                 ),
             ))
         return proposals
@@ -205,31 +302,29 @@ class Evolver:
     def _score(self, rules: dict, cases: list) -> tuple[float, float]:
         """用一组规则跑一批样本，返回 (macro-F1, 隐私召回)。
 
-        打分靠**临时替换规则**再走一遍现有分类器，不改任何全局状态——
-        评测过程必须是只读的，否则下一次评测就被上一次污染了。
+        **规则是显式参数，不碰模块全局**。以前的做法是临时改写 `classify._RULES`
+        再在 finally 里还原——多轮迭代或并行评测会互相污染，中途抛异常还会把脏值
+        留在全局上。评测过程必须只读，这是底线。
         """
         from screen_agent.understand import classify
 
-        original = classify._RULES
-        try:
-            classify._RULES = tuple(
-                (name, tuple(rules.get(name, ()))) for name in classify.ACTIVITY_LABELS
+        rules_tuple = tuple(
+            (name, tuple(rules.get(name, ()))) for name in classify.ACTIVITY_LABELS
+        )
+        truths, preds = [], []
+        for case in cases:
+            if not hasattr(case, "expect"):
+                continue
+            # 走纯函数，**别**用 ActivityClassifier.classify：
+            # 那个方法的 enabled=False 是「关掉这个功能」的语义，会直接返回空标签，
+            # 拿它来评测会让所有样本都判成 other、分数恒为 0（踩过）
+            label = classify.classify_with_rules(
+                f"{getattr(case, 'app', '')} "
+                f"{getattr(case, 'window_title', '')} {case.text}",
+                rules_tuple,
             )
-            truths, preds = [], []
-            for case in cases:
-                if not hasattr(case, "expect"):
-                    continue
-                # 直接调规则判定，**别**走 ActivityClassifier.classify——
-                # 那个方法的 enabled=False 是「关掉这个功能」的语义，会直接返回空标签，
-                # 拿它来评测会让所有样本都判成 other，分数恒为 0（踩过）
-                label = classify.ActivityClassifier._classify_rules(
-                    f"{getattr(case, 'app', '')} "
-                    f"{getattr(case, 'window_title', '')} {case.text}"
-                )
-                truths.append(case.expect)
-                preds.append(label.activity)
-        finally:
-            classify._RULES = original
+            truths.append(case.expect)
+            preds.append(label.activity)
 
         report = classification_report(truths, preds)
         privacy = 1.0
@@ -259,7 +354,9 @@ class Evolver:
         - 留出集：**不许跌**——这就是防过拟合和防奖励黑客的那道闸
         - 隐私召回：硬红线，跌一点就毙
         """
-        candidate_rules = copy.deepcopy(self.rules)
+        # 基线取**父节点的规则**，不是当前累积规则——同一批候选共享父节点，
+        # 基线就该是同一个；以前拿累积规则当基线，血缘纯属摆设
+        candidate_rules = self.rules_of(variant.parent_id)
         activity = variant.payload.get("activity")
         keywords = list(variant.payload.get("keywords") or [])
         if activity and keywords:
@@ -287,24 +384,29 @@ class Evolver:
         self.archive.add(variant)
         return variant
 
-    def step(self, failures: list[tuple[str, str, str]]) -> list[Variant]:
-        """跑一轮：把所有候选都验一遍，把通过的接进当前规则。
+    def step(self, failures: list[tuple[str, str, str]], parent_id: str | None = None,
+             strategy: str = "epsilon", epsilon: float = 0.3,
+             rng: random.Random | None = None) -> list[Variant]:
+        """跑一轮：选父节点 → 从它变异出一批候选 → 逐个验证 → 通过的接进来。
 
-        注意**逐个验证**而不是批量替换：一个候选过了才影响下一个的基线，
-        否则几个各降一点点的候选会互相掩盖。
+        `parent_id=None` 时按策略自动选父；显式传值可以强行钉住某个节点。
+
+        同一批候选**共享同一个父与同一个基线**（它们本来就是从同一处变异出来的，
+        各给一条基线反而说不通）。采纳之后 `self.rules` 迁到新叶，下一轮从这里继续。
         """
-        variants = self.propose_from_failures(failures)
+        if parent_id is None:
+            parent_id = self.sample_parent(strategy, epsilon, rng)
+        parent_rules = self.rules_of(parent_id)
+        base_dev, _ = self.score_dev(parent_rules)
+        base_holdout, base_privacy = self.score_holdout(parent_rules)
+
+        variants = self.propose_from_failures(failures, parent_id=parent_id)
         results: list[Variant] = []
         for variant in variants:
-            base_dev = self.base_dev_f1()
-            base_holdout, base_privacy = self.score_holdout(self.rules)
             verified = self.verify(variant, base_dev, base_holdout, base_privacy)
             if verified.accepted:
-                activity = verified.payload["activity"]
-                keywords = list(verified.payload.get("keywords") or [])
-                self.rules[activity] = tuple(keywords) + tuple(
-                    self.rules.get(activity, ())
-                )
+                # 采纳后迁到新叶：它代表「当前最优的那条配置」
+                self.rules = self.rules_of(verified.variant_id)
             results.append(verified)
         return results
 

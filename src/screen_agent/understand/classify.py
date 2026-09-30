@@ -91,6 +91,30 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 _DO_NOT_DISTURB = {"meeting"}
 
 
+def classify_with_rules(
+    blob: str, rules: tuple[tuple[str, tuple[str, ...]], ...]
+) -> ActivityLabel:
+    """按**传入的**规则判活动类型。
+
+    规则作为参数传进来，不读模块全局——这是为了让评测和进化能安全地试不同规则。
+
+    之前 `_score` 的做法是临时改写模块全局 `_RULES` 再还原，那样有两个问题：
+    ① 线程不安全，多轮/并行评测会互相污染；② 一旦中途抛异常，全局状态就留在脏值上。
+    改成纯函数后，"用哪套规则"是显式参数，谁也不会踩到谁。
+    """
+    lowered = (blob or "").lower()
+    for activity, hints in rules:
+        if any(hint in lowered for hint in hints):
+            return ActivityLabel(
+                activity=activity,
+                focus=0.6,
+                interruptible=activity not in _DO_NOT_DISTURB,
+                confidence=0.4,
+                source="rules",
+            )
+    return ActivityLabel(source="rules")
+
+
 @dataclass
 class ActivityLabel:
     activity: str = "other"
@@ -180,17 +204,8 @@ class ActivityClassifier:
 
     @staticmethod
     def _classify_rules(blob: str) -> ActivityLabel:
-        lowered = blob.lower()
-        for activity, hints in _RULES:
-            if any(hint in lowered for hint in hints):
-                return ActivityLabel(
-                    activity=activity,
-                    focus=0.6,
-                    interruptible=activity not in _DO_NOT_DISTURB,
-                    confidence=0.4,
-                    source="rules",
-                )
-        return ActivityLabel(source="rules")
+        """按当前生效的规则判。薄包装，真正的逻辑在 `classify_with_rules`。"""
+        return classify_with_rules(blob, _RULES)
 
     # ---- 服务生命周期：常驻是关键 ----
 
