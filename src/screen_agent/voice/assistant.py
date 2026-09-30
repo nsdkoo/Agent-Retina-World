@@ -243,6 +243,9 @@ class VoiceAssistant:
             max_steps=int(agent_cfg.get("max_steps", 5)),
             enabled=bool(agent_cfg.get("enabled", True)),
             journal=self.journal,
+            # 任务收尾回流记忆：做完的任务写成 episode，之后能被检索到
+            memory_store=self.memory,
+            agent_cfg=agent_cfg,
         )
         if self.agent is not None:
             # 事件流是唯一观测口：UI 订阅进度，日志订阅全量，谁都不用改主循环

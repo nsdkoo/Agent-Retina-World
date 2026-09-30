@@ -64,6 +64,7 @@ class AgentController:
         max_total_retries: int = 5,
         breaker_threshold: int = 3,
         max_replans: int = 1,
+        episode_sink=None,  # noqa: ANN001 - 记忆写入回调，鸭子类型
     ) -> None:
         self.registry = registry
         self.planner = planner
@@ -94,6 +95,9 @@ class AgentController:
         self._total_retries = 0
         self._tool_fails: dict[str, int] = {}
         self._replans = 0
+        # 任务收尾回流记忆的出口。传 None 就完全不碰记忆——
+        # agent 层不直接依赖 memory 模块，两边保持解耦
+        self.episode_sink = episode_sink
 
     # ---- 只读视图 ----
 
@@ -720,7 +724,30 @@ class AgentController:
         self._persist(state)
         self._close_trace("ok")
         self._flush_spans()
+        self._record_episode(state)
         return ActionResult(success=not failed, message=summary, detail={"task_id": state.task_id})
+
+    def _record_episode(self, state: AgentState) -> None:
+        """把任务收尾写进长期记忆——**best-effort**。
+
+        失败只记 debug，绝不阻塞收尾：记忆是锦上添花，收尾是主线，
+        不能让副线把主线拖垮。
+
+        只在真正做完时写（只有 `_finish` 调它）；中途取消或失败的**不写**——
+        那些结果没有复用价值，写进去只会污染以后的检索。
+        """
+        if self.episode_sink is None:
+            return
+        try:
+            self.episode_sink(
+                goal=state.goal,
+                summary=state.summary(),
+                task_id=state.task_id,
+                started_at=state.created_at,
+                ended_at=datetime.now(),
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("任务收尾写入记忆失败", exc_info=True)
 
     def _close_trace(self, status: str = "ok") -> None:
         """给任务级 span 收尾。没收尾的 span 在回放里看不出这任务到底成没成。"""

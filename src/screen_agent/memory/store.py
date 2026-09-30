@@ -187,6 +187,34 @@ class MemoryStoreV2:
                     (event.task_tag, event.summary[:120], datetime.now().isoformat()),
                 )
 
+    def save_agent_episode(self, goal: str, summary: str, task_id: str,
+                           started_at: datetime | None = None,
+                           ended_at: datetime | None = None) -> None:
+        """把一次 agent 任务的收尾写成一条 episode（情节记忆）。
+
+        **为什么是 episode 而不是 fact**：任务日志写进语义层会污染检索——
+        以后每次问「我喜欢什么」都可能捞出一堆「用户执行过 X 任务」。
+        episode 本来就有「某段时间发生过某件事」的语义、会按时间衰减，
+        放这里才合适。fact 只留给用户明确表达偏好的场景（「以后都…」）。
+
+        复用 `events` 表的好处很实在：现成的 HybridRetriever / format_for_prompt
+        直接就能检索到，**不需要为「任务记忆」另写一套检索**。
+        """
+        now = datetime.now()
+        text = (summary or goal or "").strip().replace("\n", " ")
+        event = ActivityEvent(
+            event_id=f"agent-{task_id}",
+            started_at=started_at or now,
+            ended_at=ended_at or now,
+            page_category="桌面任务",
+            user_action="task_runner",
+            summary=text[:120],
+            evidence_paths=[task_id],
+            task_tag="agent-task",
+            frame_count=1,
+        )
+        self.save_event(event)
+
     def list_events(self, limit: int = 200) -> list[ActivityEvent]:
         with _db_connect(self.db_path) as conn:
             rows = conn.execute(

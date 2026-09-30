@@ -45,6 +45,8 @@ def build_agent(
     max_steps: int = 5,
     enabled: bool = True,
     journal=None,  # noqa: ANN001 - DesktopJournal，注册桌面行为查询工具用
+    memory_store=None,  # noqa: ANN001 - MemoryStoreV2，任务收尾回流记忆用
+    agent_cfg: dict | None = None,
 ) -> AgentController | None:
     """装配一个可用的 AgentController；enabled=False 时返回 None，让调用方走老路径。"""
     if not enabled:
@@ -53,6 +55,7 @@ def build_agent(
     from screen_agent.tools.registry_setup import build_default_registry
 
     root = Path(project_root)
+    cfg = agent_cfg or {}
     # 审批统一由 PolicyEngine 负责，registry 这边不再挂 confirm_fn——两道确认会互相打架
     registry = build_default_registry(journal=journal)
     policy = PolicyEngine(
@@ -66,10 +69,20 @@ def build_agent(
         url_aliases=url_aliases or {},
         max_steps=max_steps,
     )
+    # 收尾回流记忆的出口。用鸭子类型而不是直接依赖 memory 模块——
+    # 没接记忆库时（比如测试）整条链路照常工作，只是不写 episode
+    sink = None
+    if memory_store is not None and hasattr(memory_store, "save_agent_episode"):
+        sink = memory_store.save_agent_episode
+
     return AgentController(
         registry=registry,
         planner=planner,
         policy=policy,
         stream=EventStream(),
         trajectory=TrajectoryStore(root / "data" / "agent" / "tasks.db"),
+        step_timeout=float(cfg.get("step_timeout_seconds", 0) or 0),
+        trace_content=bool(cfg.get("trace_content", True)),
+        max_retries_per_step=int(cfg.get("max_retries", 2) or 0),
+        episode_sink=sink,
     )
