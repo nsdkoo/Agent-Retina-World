@@ -146,9 +146,15 @@ class Consolidator:
         facts = self.store.list_facts(limit=20)
         if len(facts) < min_facts:
             return None
-        a, b = random.sample(facts, 2)
-        if a.category == b.category:
+        # 按类别分组后跨类别各抽一条（原 random.sample 有 27% 概率抽到同类别白跑一轮）
+        by_category: dict[str, list] = {}
+        for fact in facts:
+            by_category.setdefault(fact.category, []).append(fact)
+        if len(by_category) < 2:
             return None
+        cat_a, cat_b = random.sample(list(by_category), 2)
+        a = random.choice(by_category[cat_a])
+        b = random.choice(by_category[cat_b])
         prompt = (
             f"记忆A（{a.category}）：{a.content}\n"
             f"记忆B（{b.category}）: {b.content}\n"

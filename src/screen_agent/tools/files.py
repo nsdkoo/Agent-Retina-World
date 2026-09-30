@@ -16,6 +16,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -173,6 +174,14 @@ def _record(entries: list[dict]) -> None:
         _write_json(_journal_path(), {"updated": time.time(), "entries": entries})
 
 
+def _is_bucket_dir(path: Path) -> bool:
+    """判断是不是归档生成出来的分类目录（撤销时只清这类空目录）。"""
+    name = path.name
+    if name in _CATEGORIES or name in ("其他", "本月", "上月", "今年更早"):
+        return True
+    return bool(re.fullmatch(r"\d{4} 年", name))
+
+
 def undo_last() -> ActionResult:
     """撤销上一次写操作（归档 / 移动 / 复制 / 新建文件夹）。删除的走回收站还原。"""
     journal = _read_json(_journal_path())
@@ -191,6 +200,11 @@ def undo_last() -> ActionResult:
                 src.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(dst), str(src))
                 restored += 1
+                # 归档留下的空分类目录顺手清掉（只 rmdir 空目录，绝不递归）
+                parent = dst.parent
+                if (parent != src.parent and _is_bucket_dir(parent) and parent.is_dir()
+                        and not any(parent.iterdir())):
+                    parent.rmdir()
             elif op == "copy":
                 dst = Path(entry["dst"])
                 if dst.exists():

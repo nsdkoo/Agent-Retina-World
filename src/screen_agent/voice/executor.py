@@ -9,6 +9,7 @@ from typing import Callable
 
 from screen_agent.pipeline import PerceptionPipeline
 from screen_agent.tools.base import ActionResult, ConfirmationNeeded
+from screen_agent.tools.registry import RiskLevel
 from screen_agent.understand.chat import DisabledChatClient, OpenAICompatibleChatClient, SYSTEM_PROMPT
 from screen_agent.voice.intents import Intent, IntentType
 
