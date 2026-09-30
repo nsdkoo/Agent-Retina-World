@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from screen_agent.proactive.prepare import PreparationService, Suggestion
+from screen_agent.proactive.prepare import (
+    PreparationService,
+    Suggestion,
+    should_speak_now,
+)
 from screen_agent.proactive.service import ProactiveService
 
-__all__ = ["PreparationService", "ProactiveService", "Suggestion"]
+__all__ = ["PreparationService", "ProactiveService", "Suggestion", "should_speak_now"]

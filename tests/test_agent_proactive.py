@@ -30,7 +30,55 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from screen_agent.memory.store import MemoryStoreV2
-from screen_agent.proactive.prepare import PreparationService
+from screen_agent.proactive.prepare import PreparationService, should_speak_now
+
+
+class SpeakTimingTests(unittest.TestCase):
+    """开口时机 —— 这套机制里最该守的地方。
+
+    它做坏了**不会报错**，只会让用户默默把通知关掉，而你还以为一切正常。
+    所以抽成纯函数直接测。
+    """
+
+    def test_busy_blocks(self) -> None:
+        self.assertFalse(should_speak_now(
+            interruptible=False, in_session=False,
+            seconds_since_last=9999, min_interval=60,
+        ))
+
+    def test_in_session_blocks(self) -> None:
+        """正在对话时插嘴会打断思路。"""
+        self.assertFalse(should_speak_now(
+            interruptible=True, in_session=True,
+            seconds_since_last=9999, min_interval=60,
+        ))
+
+    def test_too_soon_blocks(self) -> None:
+        """提得太勤等于骚扰。"""
+        self.assertFalse(should_speak_now(
+            interruptible=True, in_session=False,
+            seconds_since_last=10, min_interval=600,
+        ))
+
+    def test_all_clear_opens(self) -> None:
+        self.assertTrue(should_speak_now(
+            interruptible=True, in_session=False,
+            seconds_since_last=601, min_interval=600,
+        ))
+
+    def test_exactly_at_interval_opens(self) -> None:
+        """边界取等号——正好到了就该放行，别因为差 0.001 秒一直不提。"""
+        self.assertTrue(should_speak_now(
+            interruptible=True, in_session=False,
+            seconds_since_last=600, min_interval=600,
+        ))
+
+    def test_first_time_never_blocks_by_interval(self) -> None:
+        """首次运行（上次时刻为 0）不该被间隔卡住。"""
+        self.assertTrue(should_speak_now(
+            interruptible=True, in_session=False,
+            seconds_since_last=float("inf"), min_interval=600,
+        ))
 
 
 class InterruptionGateTests(unittest.TestCase):

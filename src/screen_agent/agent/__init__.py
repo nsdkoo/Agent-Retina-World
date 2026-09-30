@@ -36,6 +36,27 @@ __all__ = [
 ]
 
 
+def _make_llm_predict(chat_client):  # noqa: ANN001, ANN202
+    """把 chat_client 包成后果预演用的**单轮**预测函数。
+
+    返回 None 表示不接 —— 没有模型时规则版照常工作，预演不会因此失效。
+
+    **为什么值得走这次模型调用**：规则版能准确说出「做了什么」（工具自己最清楚），
+    但说不出「在当前这个屏幕上做了之后到底会怎样」——那需要看上下文。
+    而这一步只在动作**不可逆**时才触发，频率天然很低，成本可控。
+    """
+    if chat_client is None or not hasattr(chat_client, "complete"):
+        return None
+
+    def predict(prompt: str) -> str:
+        return chat_client.complete(
+            [{"role": "user", "content": prompt}],
+            system="你在帮一个桌面助手预判动作后果。只输出一句后果描述，不要解释、不要建议。",
+        )
+
+    return predict
+
+
 def build_agent(
     project_root: Path,
     chat_client=None,  # noqa: ANN001
@@ -87,6 +108,12 @@ def build_agent(
     if memory_store is not None and hasattr(memory_store, "save_agent_episode"):
         sink = memory_store.save_agent_episode
 
+    # 后果预演：规则版打底，配了模型就顺手接上 LLM 版
+    # （LLM 只在动作不可逆时才真被调用，见 ForesightEngine.predict）
+    from screen_agent.agent.foresight import ForesightEngine
+
+    foresight = ForesightEngine(llm_predict=_make_llm_predict(chat_client))
+
     return AgentController(
         registry=registry,
         planner=planner,
@@ -97,4 +124,5 @@ def build_agent(
         trace_content=bool(cfg.get("trace_content", True)),
         max_retries_per_step=int(cfg.get("max_retries", 2) or 0),
         episode_sink=sink,
+        foresight=foresight,
     )

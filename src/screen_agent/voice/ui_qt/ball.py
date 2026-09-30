@@ -408,11 +408,24 @@ class QtFloatingBall:
             if self._panel is not None and not self._panel.isVisible():
                 self._toggle_panel(self._panel, self._ball)
 
+        def on_suggestion(items: list) -> None:
+            """主动建议：用气泡说一句。
+
+            **刻意不语音播报** —— 主动说的话如果还念出来会很吵，
+            用户正专注时尤其烦。文字扫一眼就够，想看再看。
+            """
+            if not items:
+                return
+            signals.suggestion.emit([s.to_dict() for s in items])
+            toast.show_message(items[0].render(), "Rita", timeout_ms=8000,
+                               anchor=ball_anchor())
+
         self.assistant.on_transcript(on_transcript)
         self.assistant.on_result(on_result)
         self.assistant.on_result_delta(on_delta)
         self.assistant.on_options(on_options)
         self.assistant.on_progress(signals.progress.emit)
+        self.assistant.on_suggestion(on_suggestion)
 
         def play_start_chain() -> None:
             self.assistant.audio_loop.set_muted_mic()

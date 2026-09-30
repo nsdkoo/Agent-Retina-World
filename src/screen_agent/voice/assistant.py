@@ -229,6 +229,18 @@ class VoiceAssistant:
         self.perception_enabled = bool(perception_cfg.get("enabled", True))
         self._watch_stop = threading.Event()
 
+        # ---- 主动准备：在合适的时候提出具体能帮的事 ----
+        # **主动机制做坏了不会报错，只会让用户默默把它关掉**，所以门槛要严：
+        # 不忙 + 不在会话中 + 与上次间隔够久 + 真有可说的事，四条全过才提
+        from screen_agent.proactive.prepare import PreparationService
+
+        self.preparation = PreparationService(memory=self.memory)
+        self._suggest_interval = float(
+            perception_cfg.get("suggest_interval_seconds", 600) or 600
+        )
+        self._last_suggest_at = 0.0
+        self._suggestion_cb: Callable[[list], None] | None = None
+
         # ---- Agent 运行时：多步任务规划 + 权限审批 + 轨迹持久化 ----
         agent_cfg = raw.get("agent", {}) if isinstance(raw.get("agent", {}), dict) else {}
         from screen_agent.agent import build_agent
@@ -313,6 +325,61 @@ class VoiceAssistant:
     def on_progress(self, cb: Callable[[str], None]) -> None:
         """注册任务进度回调：Agent 每步的结果，UI 用小字显示、不语音播报（免得吵）。"""
         self._on_progress = cb
+
+    def on_suggestion(self, cb: Callable[[list], None]) -> None:
+        """注册「现在能帮上什么」回调（第四条通道）。
+
+        和 result / prompt / progress 并列，UI 单独渲染——
+        建议不该混进对话流：它是助手主动说的一句，不是对提问的回答。
+        """
+        self._suggestion_cb = cb
+
+    def _on_sight(self, event) -> None:  # noqa: ANN001 - capture.watcher.SightEvent
+        """watcher 每条事件的落点：先记日志，再看要不要主动提点什么。
+
+        **顺序不能反**：记日志是主线（数据飞轮、日报都靠它），建议是锦上添花。
+        建议出问题绝不能影响记录。
+        """
+        self.journal.record(event)
+        self._maybe_suggest(event)
+
+    def _maybe_suggest(self, event) -> None:  # noqa: ANN001
+        """此刻该不该提建议。
+
+        **四道门槛，缺一不可**：
+        1. 用户不忙（`interruptible`）—— 最重要的一条，忙时说啥都是打扰
+        2. 不在会话中 —— 正在对话时插嘴会打断思路
+        3. 距上次提议够久 —— 提得太勤，用户第一件事就是关掉通知
+        4. 真有事可说 —— 没内容就安静，别硬凑
+
+        任何一条不过就直接返回，**不产生任何可观测行为**。
+        """
+        if self.preparation is None or self._suggestion_cb is None:
+            return
+        from screen_agent.proactive.prepare import should_speak_now
+
+        now = time.monotonic()
+        if not should_speak_now(
+            interruptible=bool(getattr(event, "interruptible", True)),
+            in_session=self.in_session(),
+            seconds_since_last=now - self._last_suggest_at,
+            min_interval=self._suggest_interval,
+        ):
+            return
+
+        try:
+            found = self.preparation.suggest(interruptible=True)
+        except Exception:  # noqa: BLE001 - 建议失败不该影响任何东西
+            logger.debug("主动建议失败", exc_info=True)
+            return
+        if not found:
+            return
+
+        self._last_suggest_at = now          # 只在真有话说时才计时
+        try:
+            self._suggestion_cb(found)
+        except Exception:  # noqa: BLE001
+            logger.debug("建议回调出错", exc_info=True)
 
     def emit_progress(self, text: str) -> None:
         if self._on_progress and text:
@@ -567,7 +634,7 @@ class VoiceAssistant:
             except Exception:  # noqa: BLE001
                 logger.debug("拉起分类服务失败", exc_info=True)
         try:
-            self.watcher.run_forever(self.journal.record, self._watch_stop, interval=1.0)
+            self.watcher.run_forever(self._on_sight, self._watch_stop, interval=1.0)
         except Exception:  # noqa: BLE001
             logger.debug("桌面观察循环退出", exc_info=True)
 

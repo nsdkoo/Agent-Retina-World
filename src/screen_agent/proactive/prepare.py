@@ -41,6 +41,31 @@ logger = logging.getLogger(__name__)
 _HABIT_MIN_OCCURRENCES = 3
 
 
+def should_speak_now(
+    *,
+    interruptible: bool,
+    in_session: bool,
+    seconds_since_last: float,
+    min_interval: float,
+) -> bool:
+    """该不该开口。
+
+    **抽成纯函数是为了能被直接测** —— 时机判断是这套机制里最该守住的地方：
+    它做坏了不会报错，只会让用户默默把通知关掉，而你还以为一切正常。
+
+    四条都过才开口：
+    1. 用户不忙 —— 最重要，忙时说啥都是打扰
+    2. 不在会话中 —— 正在对话时插嘴会打断思路
+    3. 距上次够久 —— 提得太勤等于骚扰
+    4. （这一条由调用方保证）真有可说的事
+    """
+    if not interruptible:
+        return False
+    if in_session:
+        return False
+    return seconds_since_last >= min_interval
+
+
 @dataclass
 class Suggestion:
     """一条「可以帮你做的事」。
